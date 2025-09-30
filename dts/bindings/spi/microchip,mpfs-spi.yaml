@@ -3,7 +3,9 @@
 
 description: Microchip Polarfire SOC SPI controller
 
-compatible: "microchip,mpfs-spi"
+compatible: 
+ - "microchip,mpfs-spi" 
+ - "microchip,corespi-rtl-v5"
 
 include: [spi-controller.yaml, reset-device.yaml]
 
@@ -12,4 +14,7 @@ properties:
     required: true
 
   interrupts:
+    required: true
+
+  cs-gpios:
     required: true
