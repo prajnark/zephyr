@@ -35,6 +35,15 @@ void adxl345_submit_stream(const struct device *dev, struct rtio_iodev_sqe *iode
 		uint8_t status;
 	if (fifo_watermark_irq != data->fifo_watermark_irq) {
 		data->fifo_watermark_irq = fifo_watermark_irq;
+
+		/* Disable watermark interrupt in INT_ENABLE before reconfiguring INT_MAP */
+		rc = adxl345_reg_write_mask(dev, ADXL345_INT_ENABLE,
+					    ADXL345_INT_MAP_WATERMARK_MSK, 0);
+		if (rc < 0) {
+			return;
+		}
+
+		/* Configure interrupt mapping */
 		rc = adxl345_reg_write_mask(dev, ADXL345_INT_MAP, ADXL345_INT_MAP_WATERMARK_MSK,
 					    cfg_345->route_to_int2 ? int_value : ~int_value);
 		if (rc < 0) {
@@ -52,6 +61,16 @@ void adxl345_submit_stream(const struct device *dev, struct rtio_iodev_sqe *iode
 		adxl345_configure_fifo(dev, current_fifo_mode, data->fifo_config.fifo_trigger,
 				data->fifo_config.fifo_samples);
 		rc = adxl345_reg_read_byte(dev, ADXL345_FIFO_STATUS_REG, &status);
+
+		/* Re-enable watermark interrupt in INT_ENABLE after configuration */
+		if (fifo_watermark_irq) {
+			rc = adxl345_reg_write_mask(dev, ADXL345_INT_ENABLE,
+						    ADXL345_INT_MAP_WATERMARK_MSK,
+						    ADXL345_INT_MAP_WATERMARK_MSK);
+			if (rc < 0) {
+				return;
+			}
+		}
 	}
 
 	rc = gpio_pin_interrupt_configure_dt(&cfg_345->interrupt,
@@ -309,11 +328,9 @@ static void adxl345_process_status1_cb(struct rtio *r, const struct rtio_sqe *sq
 		return;
 	}
 
-	enum sensor_stream_data_opt data_opt;
-
-	if (fifo_wmark_cfg != NULL) {
-		data_opt = fifo_wmark_cfg->opt;
-	}
+	/* fifo_wmark_cfg is guaranteed to be non-NULL here since fifo_full_irq is true */
+	__ASSERT_NO_MSG(fifo_wmark_cfg != NULL);
+	enum sensor_stream_data_opt data_opt = fifo_wmark_cfg->opt;
 
 	if (data_opt == SENSOR_STREAM_DATA_NOP || data_opt == SENSOR_STREAM_DATA_DROP) {
 		uint8_t *buf;

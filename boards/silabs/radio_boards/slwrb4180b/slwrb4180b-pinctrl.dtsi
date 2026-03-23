@@ -20,4 +20,18 @@
 			silabs,input-filter;
 		};
 	};
+
+	iadc0_default: iadc0_default {
+		group0 {
+			silabs,analog-bus = <ABUS_AEVEN0_IADC0>;
+		};
+	};
+
+	timer0_pwm_default: timer0_pwm_default {
+		group0 {
+			pins = <TIMER0_CC0_PD2>;
+			drive-push-pull;
+			output-low;
+		};
+	};
 };

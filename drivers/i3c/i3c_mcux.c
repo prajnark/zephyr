@@ -126,10 +126,13 @@ struct mcux_i3c_data {
 		bool has_mandatory_byte;
 	} ibi;
 #endif
-};
 
-uint32_t merrwarn_reg;
-static struct k_spinlock lock;
+	/** Copy of last errwarn from isr */
+	uint32_t merrwarn_reg;
+
+	/** Lock to serialize errnwarn access */
+	struct k_spinlock errwarn_lock;
+};
 
 /**
  * @brief Read a register and test for bit matches with timeout.
@@ -240,19 +243,21 @@ static void mcux_i3c_interrupt_enable(I3C_Type *base, uint32_t mask)
  *
  * @retval errors reported or 0 if no errors.
  */
-static uint32_t mcux_i3c_has_error(void)
+static uint32_t mcux_i3c_has_error(struct mcux_i3c_data *data)
 {
 	uint32_t ret = 0;
 
-	k_spinlock_key_t key = k_spin_lock(&lock);
+	k_spinlock_key_t key = k_spin_lock(&data->errwarn_lock);
 
-	if (merrwarn_reg) {
+	if (data->merrwarn_reg) {
 		/* Read and clear */
-		ret = merrwarn_reg;
-		merrwarn_reg = 0;
+		ret = data->merrwarn_reg;
+		data->merrwarn_reg = 0;
 	}
 
-	k_spin_unlock(&lock, key);
+	ret &= ~I3C_MERRWARN_TIMEOUT_MASK;
+
+	k_spin_unlock(&data->errwarn_lock, key);
 
 	return ret;
 }
@@ -449,14 +454,12 @@ static inline void mcux_i3c_request_daa(I3C_Type *base)
  *
  * @param base Pointer to controller registers.
  */
-static inline void mcux_i3c_request_auto_ibi(I3C_Type *base)
+static inline int mcux_i3c_request_auto_ibi(I3C_Type *base)
 {
-	reg32_update(&base->MCTRL,
-		     I3C_MCTRL_REQUEST_MASK | I3C_MCTRL_IBIRESP_MASK | I3C_MCTRL_RDTERM_MASK,
-		     I3C_MCTRL_REQUEST_AUTO_IBI | I3C_MCTRL_IBIRESP_ACK_AUTO);
+	base->MCTRL = I3C_MCTRL_REQUEST_AUTO_IBI | I3C_MCTRL_IBIRESP_ACK_AUTO;
 
 	/* AUTO_IBI should result in IBIWON bit being set in status */
-	mcux_i3c_status_wait_clear(base, I3C_MSTATUS_IBIWON_MASK);
+	return mcux_i3c_status_wait_timeout(base, I3C_MSTATUS_IBIWON_MASK, 100);
 }
 
 /**
@@ -541,8 +544,8 @@ static inline void mcux_i3c_wait_idle(struct mcux_i3c_data *dev_data, I3C_Type *
  *
  * @return 0 if successful, or negative if error.
  */
-static int mcux_i3c_request_emit_start(I3C_Type *base, uint8_t addr, bool is_i2c,
-				       bool is_read, size_t read_sz)
+static int mcux_i3c_request_emit_start(struct mcux_i3c_data *dev_data, I3C_Type *base, uint8_t addr,
+				       bool is_i2c, bool is_read, size_t read_sz)
 {
 	uint32_t mctrl;
 	int ret = 0;
@@ -568,7 +571,7 @@ static int mcux_i3c_request_emit_start(I3C_Type *base, uint8_t addr, bool is_i2c
 						 1000);
 	if (ret == 0) {
 		/* Check for NACK */
-		if (mcux_i3c_has_error() & I3C_MERRWARN_NACK_MASK) {
+		if (mcux_i3c_has_error(dev_data) & I3C_MERRWARN_NACK_MASK) {
 			ret = -ENODEV;
 		}
 	}
@@ -586,7 +589,8 @@ static int mcux_i3c_request_emit_start(I3C_Type *base, uint8_t addr, bool is_i2c
  * @param wait_stop True if need to wait for controller to be
  *                  no longer in NORMACT.
  */
-static inline int mcux_i3c_do_request_emit_stop(I3C_Type *base, bool wait_stop)
+static inline int mcux_i3c_do_request_emit_stop(struct mcux_i3c_data *dev_data, I3C_Type *base,
+						bool wait_stop)
 {
 	uint32_t merrwarn;
 
@@ -607,7 +611,7 @@ static inline int mcux_i3c_do_request_emit_stop(I3C_Type *base, bool wait_stop)
 		 */
 		while (reg32_test_match(&base->MSTATUS, I3C_MSTATUS_STATE_MASK,
 					I3C_MSTATUS_STATE_NORMACT)) {
-			merrwarn = mcux_i3c_has_error();
+			merrwarn = mcux_i3c_has_error(dev_data);
 			if (merrwarn) {
 				/*
 				 * A timeout error has been observed on
@@ -650,7 +654,7 @@ static inline void mcux_i3c_request_emit_stop(struct mcux_i3c_data *dev_data,
 	 * it so any error as a result of emitting the stop
 	 * itself doesn't get incorrectly mixed together.
 	 */
-	if (mcux_i3c_has_error()) {
+	if (mcux_i3c_has_error(dev_data)) {
 		mcux_i3c_errwarn_clear_all_nowait(base);
 	}
 
@@ -662,7 +666,7 @@ static inline void mcux_i3c_request_emit_stop(struct mcux_i3c_data *dev_data,
 
 	retries = 0;
 	while (1) {
-		int err = mcux_i3c_do_request_emit_stop(base, wait_stop);
+		int err = mcux_i3c_do_request_emit_stop(dev_data, base, wait_stop);
 
 		if (err) {
 			if ((err == -ETIMEDOUT) && (++retries <= I3C_MAX_STOP_RETRIES)) {
@@ -691,13 +695,11 @@ static inline void mcux_i3c_request_emit_stop(struct mcux_i3c_data *dev_data,
  *
  * @param base Pointer to controller registers.
  */
-static inline void mcux_i3c_ibi_respond_nack(I3C_Type *base)
+static inline int mcux_i3c_ibi_respond_nack(I3C_Type *base)
 {
-	reg32_update(&base->MCTRL,
-		     I3C_MCTRL_REQUEST_MASK | I3C_MCTRL_IBIRESP_MASK,
-		     I3C_MCTRL_REQUEST_IBI_ACK_NACK | I3C_MCTRL_IBIRESP_NACK);
+	base->MCTRL = I3C_MCTRL_REQUEST_IBI_ACK_NACK | I3C_MCTRL_IBIRESP_NACK;
 
-	mcux_i3c_status_wait_clear(base, I3C_MSTATUS_MCTRLDONE_MASK);
+	return mcux_i3c_status_wait_clear_timeout(base, I3C_MSTATUS_MCTRLDONE_MASK, 1000);
 }
 
 /**
@@ -705,13 +707,11 @@ static inline void mcux_i3c_ibi_respond_nack(I3C_Type *base)
  *
  * @param base Pointer to controller registers.
  */
-static inline void mcux_i3c_ibi_respond_ack(I3C_Type *base)
+static inline int mcux_i3c_ibi_respond_ack(I3C_Type *base)
 {
-	reg32_update(&base->MCTRL,
-		     I3C_MCTRL_REQUEST_MASK | I3C_MCTRL_IBIRESP_MASK,
-		     I3C_MCTRL_REQUEST_IBI_ACK_NACK | I3C_MCTRL_IBIRESP_ACK);
+	base->MCTRL = I3C_MCTRL_REQUEST_IBI_ACK_NACK | I3C_MCTRL_IBIRESP_ACK;
 
-	mcux_i3c_status_wait_clear(base, I3C_MSTATUS_MCTRLDONE_MASK);
+	return mcux_i3c_status_wait_clear_timeout(base, I3C_MSTATUS_MCTRLDONE_MASK, 1000);
 }
 
 /**
@@ -817,10 +817,7 @@ static int mcux_i3c_recover_bus(const struct device *dev)
 	/* Exhaust all target initiated IBI */
 	while (mcux_i3c_status_is_set(base, I3C_MSTATUS_SLVSTART_MASK)) {
 		/* Tell the controller to perform auto IBI. */
-		mcux_i3c_request_auto_ibi(base);
-
-		if (mcux_i3c_status_wait_clear_timeout(base, I3C_MSTATUS_COMPLETE_MASK,
-						       1000) == -ETIMEDOUT) {
+		if (mcux_i3c_request_auto_ibi(base) == -ETIMEDOUT) {
 			break;
 		}
 
@@ -857,7 +854,7 @@ static int mcux_i3c_recover_bus(const struct device *dev)
  * @return Number of bytes read, or negative if error.
  */
 static int mcux_i3c_do_one_xfer_read(I3C_Type *base, struct mcux_i3c_data *data,
-				     uint8_t *buf, uint8_t buf_sz, bool ibi)
+				     uint8_t *buf, size_t buf_sz)
 {
 	int ret = 0;
 	int offset = 0;
@@ -869,7 +866,16 @@ static int mcux_i3c_do_one_xfer_read(I3C_Type *base, struct mcux_i3c_data *data,
 		 */
 		while (offset < buf_sz) {
 			if (mcux_i3c_fifo_rx_count_get(base) == 0) {
-				/* Enable Receive pending interrupt */
+				/* No more data - check if target marked message as complete */
+				if (mcux_i3c_status_is_set(base, I3C_MSTATUS_COMPLETE_MASK)) {
+					/* All data received, move on */
+					LOG_DBG("Target data complete, offset %d buf_sz %d", offset,
+						buf_sz);
+					ret = offset;
+					break;
+				}
+
+				/* More data to come, enable Receive pending interrupt */
 				base->MINTSET = I3C_MSTATUS_RXPEND_MASK;
 
 				/* Wait for data to arrive or an error */
@@ -884,28 +890,25 @@ static int mcux_i3c_do_one_xfer_read(I3C_Type *base, struct mcux_i3c_data *data,
 				buf[offset++] = (uint8_t)base->MRDATAB;
 			}
 		}
-		/*
-		 * If timed out, we abort the transaction.
-		 */
-		if ((mcux_i3c_has_error() & I3C_MERRWARN_TIMEOUT_MASK) || ret) {
-			ret = -ETIMEDOUT;
 
-			/* for ibi, ignore timeout err if any bytes were
-			 * read, since the code doesn't know how many
-			 * bytes will be sent by device.
-			 */
-			if (ibi && offset) {
-				ret = offset;
-			} else {
-				LOG_ERR("Timeout error");
-			}
+		/* Done reading all data */
+		if (ret > 0) {
 			break;
 		}
 
+		/*
+		 * If timed out, we abort the transaction.
+		 */
+		if ((mcux_i3c_has_error(data) & I3C_MERRWARN_TIMEOUT_MASK) || ret < 0) {
+			ret = -ETIMEDOUT;
+
+			LOG_ERR("Timeout error");
+			break;
+		}
 	}
 
 	/* If no errors, then return the number of bytes read */
-	if (ret > 0) {
+	if (ret >= 0) {
 		ret = offset;
 	}
 
@@ -992,7 +995,7 @@ static int mcux_i3c_do_one_xfer(I3C_Type *base, struct mcux_i3c_data *data,
 
 	/* Emit START if so desired */
 	if (emit_start) {
-		ret = mcux_i3c_request_emit_start(base, addr, is_i2c, is_read, buf_sz);
+		ret = mcux_i3c_request_emit_start(data, base, addr, is_i2c, is_read, buf_sz);
 		if (ret != 0) {
 			emit_stop = true;
 
@@ -1001,16 +1004,18 @@ static int mcux_i3c_do_one_xfer(I3C_Type *base, struct mcux_i3c_data *data,
 	}
 
 	if ((buf == NULL) || (buf_sz == 0)) {
+		emit_stop = true;
 		goto out_one_xfer;
 	}
 
 	if (is_read) {
-		ret = mcux_i3c_do_one_xfer_read(base, data, buf, buf_sz, false);
+		ret = mcux_i3c_do_one_xfer_read(base, data, buf, buf_sz);
 	} else {
 		ret = mcux_i3c_do_one_xfer_write(base, data, buf, buf_sz, no_ending);
 	}
 
 	if (ret < 0) {
+		emit_stop = true;
 		goto out_one_xfer;
 	}
 
@@ -1019,8 +1024,9 @@ static int mcux_i3c_do_one_xfer(I3C_Type *base, struct mcux_i3c_data *data,
 		 * Wait for controller to say the operation is done.
 		 * Save time by not clearing the bit.
 		 */
-		ret = mcux_i3c_status_wait_timeout(base, I3C_MSTATUS_COMPLETE_MASK, 1000);
-		if (ret != 0) {
+		int ret2 = mcux_i3c_status_wait_timeout(base, I3C_MSTATUS_COMPLETE_MASK, 1000);
+
+		if (ret2 != 0) {
 			LOG_DBG("%s: timed out addr 0x%02x, buf_sz %u",
 				__func__, addr, buf_sz);
 			emit_stop = true;
@@ -1029,7 +1035,8 @@ static int mcux_i3c_do_one_xfer(I3C_Type *base, struct mcux_i3c_data *data,
 		}
 	}
 
-	if (mcux_i3c_has_error()) {
+	if (mcux_i3c_has_error(data)) {
+		emit_stop = true;
 		ret = -EIO;
 	}
 
@@ -1114,8 +1121,8 @@ static int mcux_i3c_transfer(const struct device *dev,
 		 */
 		if (!(msgs[i].flags & I3C_MSG_NBCH) && (send_broadcast)) {
 			while (1) {
-				ret = mcux_i3c_request_emit_start(base, I3C_BROADCAST_ADDR,
-								  false, false, 0);
+				ret = mcux_i3c_request_emit_start(
+					dev_data, base, I3C_BROADCAST_ADDR, false, false, 0);
 				if (ret == -ENODEV) {
 					LOG_WRN("emit start of broadcast addr got NACK, maybe IBI");
 					/* wait for idle then try again */
@@ -1202,7 +1209,7 @@ static int mcux_i3c_do_daa(const struct device *dev)
 	do {
 		/* Loop to grab data from devices (Provisioned ID, BCR and DCR) */
 		do {
-			if (mcux_i3c_has_error()) {
+			if (mcux_i3c_has_error(data)) {
 				LOG_ERR("DAA recv error");
 
 				ret = -EIO;
@@ -1335,7 +1342,7 @@ static int mcux_i3c_do_ccc(const struct device *dev,
 	LOG_DBG("CCC[0x%02x]", payload->ccc.id);
 
 	/* Emit START */
-	ret = mcux_i3c_request_emit_start(base, I3C_BROADCAST_ADDR, false, false, 0);
+	ret = mcux_i3c_request_emit_start(data, base, I3C_BROADCAST_ADDR, false, false, 0);
 	if (ret < 0) {
 		LOG_ERR("CCC[0x%02x] %s START error (%d)",
 			payload->ccc.id,
@@ -1456,8 +1463,16 @@ static void mcux_i3c_ibi_work(struct k_work *work)
 		goto out_ibi_work;
 	};
 
+	/* IBIWON maybe set before request auto IBI causing it to return immediately
+	 * Thus clear IBIWON before requesting AUTO IBI
+	 */
+	base->MSTATUS = I3C_MSTATUS_IBIWON_MASK;
+
 	/* Use auto IBI to service the IBI */
-	mcux_i3c_request_auto_ibi(base);
+	if (mcux_i3c_request_auto_ibi(base) == -ETIMEDOUT) {
+		mcux_i3c_request_emit_stop(data, base, true);
+		goto out_ibi_work;
+	}
 
 	mstatus = sys_read32((mem_addr_t)&base->MSTATUS);
 	ibiaddr = (mstatus & I3C_MSTATUS_IBIADDR_MASK) >> I3C_MSTATUS_IBIADDR_SHIFT;
@@ -1500,7 +1515,7 @@ static void mcux_i3c_ibi_work(struct k_work *work)
 		target = i3c_dev_list_i3c_addr_find(dev, (uint8_t)ibiaddr);
 		if (target != NULL) {
 			ret = mcux_i3c_do_one_xfer_read(base, data, &payload[0],
-							sizeof(payload), true);
+							sizeof(payload));
 			if (ret >= 0) {
 				payload_sz = (size_t)ret;
 			} else {
@@ -1527,7 +1542,7 @@ static void mcux_i3c_ibi_work(struct k_work *work)
 		break;
 	}
 
-	if (mcux_i3c_has_error()) {
+	if (mcux_i3c_has_error(data)) {
 		/*
 		 * If the controller detects any errors, simply
 		 * emit a STOP to abort the IBI. The target will
@@ -1556,6 +1571,7 @@ static void mcux_i3c_ibi_work(struct k_work *work)
 		}
 		break;
 	case I3C_MSTATUS_IBITYPE_MR:
+		mcux_i3c_request_emit_stop(data, base, true);
 		break;
 	default:
 		break;
@@ -1807,7 +1823,7 @@ static void mcux_i3c_isr(const struct device *dev)
 		err = i3c_ibi_work_enqueue_cb(dev, mcux_i3c_ibi_work);
 		if (err) {
 			LOG_ERR("Error enqueuing ibi work, err %d", err);
-			base->MINTSET = I3C_MINTCLR_SLVSTART_MASK;
+			base->MINTSET = I3C_MINTSET_SLVSTART_MASK;
 		}
 	}
 #endif
@@ -1825,7 +1841,7 @@ static void mcux_i3c_isr(const struct device *dev)
 	}
 
 	if (interrupt_enable & I3C_MSTATUS_ERRWARN_MASK) {
-		merrwarn_reg = base->MERRWARN;
+		dev_data->merrwarn_reg = base->MERRWARN;
 		base->MERRWARN = base->MERRWARN;
 	}
 }
@@ -1990,8 +2006,7 @@ static int mcux_i3c_init(const struct device *dev)
 	}
 
 	/* Disable all interrupts except error interrupt */
-	base->MINTCLR = I3C_MINTCLR_SLVSTART_MASK |
-			I3C_MINTCLR_MCTRLDONE_MASK |
+	base->MINTCLR = I3C_MINTCLR_MCTRLDONE_MASK |
 			I3C_MINTCLR_COMPLETE_MASK |
 			I3C_MINTCLR_RXPEND_MASK |
 			I3C_MINTCLR_TXNOTFULL_MASK |
@@ -1999,7 +2014,10 @@ static int mcux_i3c_init(const struct device *dev)
 			I3C_MINTCLR_NOWMASTER_MASK;
 
 	/* Enable error interrupt */
-	base->MINTSET = I3C_MSTATUS_ERRWARN_MASK;
+	base->MINTSET = I3C_MSTATUS_ERRWARN_MASK | I3C_MSTATUS_SLVSTART_MASK;
+
+	/* Configure interrupt */
+	config->irq_config_func(dev);
 
 	/* Just in case the bus is not in idle. */
 	ret = mcux_i3c_recover_bus(dev);
@@ -2007,9 +2025,6 @@ static int mcux_i3c_init(const struct device *dev)
 		ret = -EIO;
 		goto err_out;
 	}
-
-	/* Configure interrupt */
-	config->irq_config_func(dev);
 
 	/* Perform bus initialization */
 	ret = i3c_bus_init(dev, &config->common.dev_list);

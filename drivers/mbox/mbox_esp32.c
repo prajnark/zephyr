@@ -13,6 +13,10 @@
 #include <soc/pmu_reg.h>
 #include <ulp_lp_core_utils.h>
 #include <ulp_lp_core_interrupts.h>
+#if defined(CONFIG_SOC_ESP32C6_LPCORE)
+#include <hal/pmu_ll.h>
+#include <soc/pmu_struct.h>
+#endif
 #endif
 
 #include "soc/gpio_periph.h"
@@ -38,8 +42,8 @@ __packed struct esp32_mbox_control {
 };
 
 struct esp32_mbox_memory {
-	volatile uint8_t *pro_cpu_shm;
-	volatile uint8_t *app_cpu_shm;
+	uint8_t *pro_cpu_shm;
+	uint8_t *app_cpu_shm;
 };
 
 struct esp32_mbox_config {
@@ -60,6 +64,22 @@ struct esp32_mbox_data {
 	struct esp32_mbox_memory shm;
 	struct esp32_mbox_control *control;
 };
+
+static void esp32_mbox_isr(const struct device *dev);
+
+#if defined(CONFIG_SOC_ESP32C6_LPCORE)
+static const struct device *s_mbox_dev;
+
+void ulp_lp_core_lp_pmu_intr_handler(void)
+{
+	if (PMU.lp_ext.int_st.sw_trigger) {
+		pmu_ll_lp_clear_sw_intr_status(&PMU);
+		if (s_mbox_dev != NULL) {
+			esp32_mbox_isr(s_mbox_dev);
+		}
+	}
+}
+#endif
 
 IRAM_ATTR static void esp32_mbox_isr(const struct device *dev)
 {
@@ -92,9 +112,6 @@ IRAM_ATTR static void esp32_mbox_isr(const struct device *dev)
 	}
 
 	if (dev_data->cb) {
-		/* For ESP32 soft mbox driver, the message parameter of the callback holds
-		 * the portion of shared memory that belongs to the current core ID.
-		 */
 		msg.data = (dev_data->this_core_id == 0) ? (const void *)dev_data->shm.pro_cpu_shm
 							 : (const void *)dev_data->shm.app_cpu_shm;
 		msg.size = dev_data->shm_size;
@@ -109,13 +126,17 @@ IRAM_ATTR static void esp32_mbox_isr(const struct device *dev)
 static int esp32_mbox_send(const struct device *dev, mbox_channel_id_t channel,
 			   const struct mbox_msg *msg)
 {
-	ARG_UNUSED(msg);
-
 	struct esp32_mbox_data *dev_data = (struct esp32_mbox_data *)dev->data;
+	uint32_t mtu = dev_data->shm_size;
 
 	if (channel > 0xFFFF) {
 		LOG_ERR("Invalid channel");
 		return -EINVAL;
+	}
+
+	if (msg != NULL && msg->data != NULL && msg->size > mtu) {
+		LOG_ERR("Message size %d exceeds shared memory region %d", msg->size, mtu);
+		return -EMSGSIZE;
 	}
 
 	uint32_t key = irq_lock();
@@ -124,6 +145,13 @@ static int esp32_mbox_send(const struct device *dev, mbox_channel_id_t channel,
 	while (!atomic_cas(&dev_data->control->lock, ESP32_MBOX_LOCK_FREE_VAL,
 			   dev_data->this_core_id)) {
 		k_msleep(1);
+	}
+
+	/* Copy data into the other core's receive region */
+	if (msg != NULL && msg->data != NULL) {
+		uint8_t *dest = (dev_data->other_core_id == 0) ? dev_data->shm.pro_cpu_shm
+							       : dev_data->shm.app_cpu_shm;
+		memcpy(dest, msg->data, msg->size);
 	}
 
 	/* Only the lower 16bits of id are used */
@@ -209,8 +237,10 @@ static int esp32_mbox_set_enabled(const struct device *dev, mbox_channel_id_t ch
 static int esp32_mbox_init(const struct device *dev)
 {
 	struct esp32_mbox_data *data = (struct esp32_mbox_data *)dev->data;
+#if !defined(CONFIG_SOC_ESP32C6_LPCORE)
 	struct esp32_mbox_config *cfg = (struct esp32_mbox_config *)dev->config;
 	int ret;
+#endif
 
 #if defined(CONFIG_SOC_ESP32C6_LPCORE)
 	data->this_core_id = 1;
@@ -218,11 +248,6 @@ static int esp32_mbox_init(const struct device *dev)
 	data->this_core_id = esp_core_id();
 #endif
 	data->other_core_id = (data->this_core_id == 0) ? 1 : 0;
-
-	LOG_DBG("Size of MBOX shared memory: %d", data->shm_size);
-	LOG_DBG("Address of PRO_CPU MBOX shared memory: %p", data->shm.pro_cpu_shm);
-	LOG_DBG("Address of APP_CPU MBOX shared memory: %p", data->shm.app_cpu_shm);
-	LOG_DBG("Address of MBOX control structure: %p", data->control);
 
 	/* pro_cpu is responsible to initialize the lock of shared memory */
 	if (data->this_core_id == 0) {
@@ -242,9 +267,7 @@ static int esp32_mbox_init(const struct device *dev)
 		 * after that releases
 		 */
 #if defined(CONFIG_SOC_ESP32C6_LPCORE)
-		ret = 0;
-		ulp_lp_core_intr_set_handler(cfg->irq_source_app_cpu,
-					     (void (*)(void *))esp32_mbox_isr, (void *)dev);
+		s_mbox_dev = dev;
 		ulp_lp_core_intr_enable();
 		ulp_lp_core_sw_intr_enable(true);
 #else
@@ -263,7 +286,11 @@ static int esp32_mbox_init(const struct device *dev)
 		LOG_DBG("Synchronization done");
 	}
 
+#if defined(CONFIG_SOC_ESP32C6_LPCORE)
+	return 0;
+#else
 	return ret;
+#endif
 }
 
 static DEVICE_API(mbox, esp32_mbox_driver_api) = {
@@ -288,7 +315,7 @@ static DEVICE_API(mbox, esp32_mbox_driver_api) = {
 		.irq_flags_app_cpu = DT_INST_IRQ_BY_IDX(idx, 1, flags),                            \
 	};                                                                                         \
 	static struct esp32_mbox_data esp32_mbox_device_data_##idx = {                             \
-		.shm_size = ESP32_MBOX_SHM_SIZE_BY_IDX(idx),                                       \
+		.shm_size = ESP32_MBOX_SHM_SIZE_BY_IDX(idx) / 2,                                   \
 		.shm.pro_cpu_shm = (uint8_t *)ESP32_MBOX_SHM_ADDR_BY_IDX(idx),                     \
 		.shm.app_cpu_shm = (uint8_t *)ESP32_MBOX_SHM_ADDR_BY_IDX(idx) +                    \
 				   ESP32_MBOX_SHM_SIZE_BY_IDX(idx) / 2,                            \

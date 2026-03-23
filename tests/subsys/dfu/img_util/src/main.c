@@ -6,21 +6,25 @@
  */
 
 #include <zephyr/ztest.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/dfu/flash_img.h>
 
 #define SLOT0_PARTITION		slot0_partition
 #define SLOT1_PARTITION		slot1_partition
 
-#define FIXED_PARTITION_IS_RUNNING_APP_PARTITION(label) \
-	(FIXED_PARTITION_OFFSET(label) == CONFIG_FLASH_LOAD_OFFSET)
+#define PARTITION_IS_RUNNING_APP_PARTITION(label)                                            \
+	DT_SAME_NODE(PARTITION_NODE_MTD(DT_CHOSEN(zephyr_code_partition)),                   \
+		PARTITION_MTD(label)) &&                                                     \
+	(PARTITION_OFFSET(label) <= CONFIG_FLASH_LOAD_OFFSET &&                              \
+	 PARTITION_OFFSET(label) + PARTITION_SIZE(label) > CONFIG_FLASH_LOAD_OFFSET)
 
-#if FIXED_PARTITION_IS_RUNNING_APP_PARTITION(slot0_partition)
-#define UPLOAD_PARTITION_ID	FIXED_PARTITION_ID(SLOT1_PARTITION)
-#define RUNNING_PARTITION_ID	FIXED_PARTITION_ID(SLOT0_PARTITION)
+#if PARTITION_IS_RUNNING_APP_PARTITION(slot0_partition)
+#define UPLOAD_PARTITION_ID	PARTITION_ID(SLOT1_PARTITION)
+#define RUNNING_PARTITION_ID	PARTITION_ID(SLOT0_PARTITION)
 #else
-#define UPLOAD_PARTITION_ID	FIXED_PARTITION_ID(SLOT0_PARTITION)
-#define RUNNING_PARTITION_ID	FIXED_PARTITION_ID(SLOT1_PARTITION)
+#define UPLOAD_PARTITION_ID	PARTITION_ID(SLOT0_PARTITION)
+#define RUNNING_PARTITION_ID	PARTITION_ID(SLOT1_PARTITION)
 #endif
 
 

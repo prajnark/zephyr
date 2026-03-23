@@ -30,6 +30,9 @@ This document provides a quick reference for commonly used reST and
 Sphinx-defined directives and roles used to create the documentation
 you're reading.
 
+For instructions regarding writing good C API documentation, see
+:ref:`doxygen_style`.
+
 Content Structure
 *****************
 
@@ -420,18 +423,14 @@ This would render as:
 Non-ASCII Characters
 ====================
 
-You can insert non-ASCII characters such as a Trademark symbol (|trade|),
-by using the notation ``|trade|``.
-Available replacement names are defined in an include file used during the Sphinx processing
-of the reST files.  The names of these replacement characters are the same as used in HTML
-entities used to insert characters in HTML, e.g., ``\&trade;`` and are defined in the
-file :zephyr_file:`doc/substitutions.txt` as listed below:
+Prefer plain ASCII unless a specific symbol is required for correctness or conventional typography
+(for example units like µ, or well-known marks like ™).
 
-.. literalinclude:: ../../substitutions.txt
-   :language: rst
+Avoid adding non-ASCII characters purely for aesthetic purposes.
 
-We've kept the substitutions list small but others can be added as
-needed by submitting a change to the :zephyr_file:`doc/substitutions.txt` file.
+The file :zephyr_file:`doc/substitutions.txt` contains some basic HTML substitution definitions for
+special formatting needs (e.g. to force line breaks), but Unicode characters can and should be used
+directly in the documentation source files.
 
 Code Blocks and Command Examples
 ================================
@@ -1292,6 +1291,28 @@ Boards
 
    This directive is used to generate a catalog of Zephyr-supported boards that can be used to
    quickly browse the list of all supported boards and filter them according to various criteria.
+
+.. rst:role:: zephyr:board-catalog
+
+   This role is used to reference the board catalog page, optionally with filter parameters.
+   For example::
+
+      Check out :zephyr:board-catalog:`` for more information.
+
+   Will render as:
+
+      Check out :zephyr:board-catalog:`` for more information.
+
+   This role can be used exactly like the built-in :rst:role:`ref` role, i.e. you may provide a
+   custom link text. For example::
+
+      Check out the :zephyr:board-catalog:`boards using this compatible <#compatibles=ti,hdc2080>`
+      for more information.
+
+   Will render as:
+
+      Check out the :zephyr:board-catalog:`boards using this compatible <#compatibles=ti,hdc2080>`
+      for more information.
 
 .. rst:directive:: .. zephyr:board-supported-hw::
 

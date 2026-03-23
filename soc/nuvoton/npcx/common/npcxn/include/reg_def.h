@@ -328,6 +328,9 @@ struct uart_reg {
 	volatile uint8_t reserved11;
 	/* 0x026: FIFO Mode Receive Control */
 	volatile uint8_t UFRCTL;
+	volatile uint8_t reserved12[5];
+	/* 0x02C: Common Mode Operation Control */
+	volatile uint8_t UCNTL;
 };
 
 /* UART register fields */
@@ -352,6 +355,9 @@ struct uart_reg {
 #define NPCX_UMDSL_ETD       4
 #define NPCX_UMDSL_ERD       5
 
+#define NPCX_UFRS_CHAR_DATA_BIT_8 0
+#define NPCX_UFRS_CHAR_DATA_BIT_7 1
+
 #define NPCX_UFTSTS_TEMPTY_LVL       FIELD(0, 5)
 #define NPCX_UFTSTS_TEMPTY_LVL_STS   5
 #define NPCX_UFTSTS_TFIFO_EMPTY_STS  6
@@ -367,6 +373,8 @@ struct uart_reg {
 #define NPCX_UFRCTL_RFULL_LVL_EN     5
 #define NPCX_UFRCTL_RNEMPTY_EN       6
 #define NPCX_UFRCTL_ERR_EN           7
+#define NPCX_UCNTL_CR_SIN_INV        0
+#define NPCX_UCNTL_CR_SOUT_INV       1
 
 /* Macro functions for MIWU multi-registers */
 #define NPCX_WKEDG(base, group)  (*(volatile uint8_t *)(base + NPCX_WKEDG_OFFSET(group)))
@@ -705,6 +713,7 @@ struct espi_reg {
 #define NPCX_ESPISTS_BMBURSTDONE         23
 #define NPCX_ESPISTS_ESPIRST_LVL         24
 #define NPCX_ESPISTS_AUTO_RD_DIS_STS     29
+#define NPCX_STATUS_IMG_VWIRE_AVAIL      6
 #define NPCX_VWSWIRQ_IRQ_NUM             FIELD(0, 7)
 #define NPCX_VWSWIRQ_IRQ_LVL             7
 #define NPCX_VWSWIRQ_INDEX               FIELD(8, 7)
@@ -739,7 +748,7 @@ struct espi_reg {
 #define NPCX_FLASHCFG_TRGFLEBLKSIZE      FIELD(16, 8)
 #define NPCX_FLASHCFG_FLREQSUP           FIELD(0, 3)
 #define NPCX_FLASHCTL_FLASH_NP_FREE      0
-#define NPCX_FLASHCTL_FLASH_TX_AVAIL     1
+#define NPCX_FLASHCTL_FLASH_ACC_TX_AVAIL 1
 #define NPCX_FLASHCTL_STRPHDR            2
 #define NPCX_FLASHCTL_DMATHRESH          FIELD(3, 2)
 #define NPCX_FLASHCTL_AMTSIZE            FIELD(5, 8)
@@ -969,6 +978,8 @@ struct kbc_reg {
 #define NPCX_HICTRL_PMIOCIE 5
 #define NPCX_HICTRL_PMICIE  6
 #define NPCX_HICTRL_FW_OBF  7
+#define NPCX_HIIRQC_IRQ1B   0
+#define NPCX_HIIRQC_IRQ12B  1
 #define NPCX_HIKMST_OBF     0
 #define NPCX_HIKMST_IBF     1
 #define NPCX_HIKMST_F0      2
@@ -1927,6 +1938,7 @@ struct i3c_reg {
 #define NPCX_I3C_MINTCLR_IBIWON      13
 #define NPCX_I3C_MINTCLR_ERRWARN     15
 #define NPCX_I3C_MINTCLR_NOWCNTLR    19
+#define NPCX_I3C_MINTMASKED_COMPLETE 10
 #define NPCX_I3C_MINTMASKED_NOWCNTLR 19
 #define NPCX_I3C_MDATACTRL_FLUSHTB   0
 #define NPCX_I3C_MDATACTRL_FLUSHFB   1
@@ -2227,5 +2239,44 @@ struct gdma_reg {
 #define NPCX_DMACTL_TC                   18
 #define NPCX_DMACTL_BMSAFIX              30
 #define NPCX_DMACTL_BMDAFIX              31
+
+/* LCT (Long Countdown Timer) registers */
+struct lct_reg {
+	/* 0x000-0x001 */
+	volatile uint8_t reserved1[2];
+	/* 0x002: LCT Control */
+	volatile uint8_t LCTCONT;
+	/* 0x003 */
+	volatile uint8_t reserved2;
+	/* 0x004: LCT Status */
+	volatile uint8_t LCTSTAT;
+	/* 0x005: LCT Seconds */
+	volatile uint8_t LCTSECOND;
+	/* 0x006: LCT Minutes */
+	volatile uint8_t LCTMINUTE;
+	/* 0x007 */
+	volatile uint8_t reserved3;
+	/* 0x008: LCT Hours */
+	volatile uint8_t LCTHOUR;
+	/* 0x009 */
+	volatile uint8_t reserved4;
+	/* 0x00A: LCT Days */
+	volatile uint8_t LCTDAY;
+	/* 0x00B */
+	volatile uint8_t reserved5;
+	/* 0x00C: LCT Weeks */
+	volatile uint8_t LCTWEEK;
+#if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_npcx_lct_v2)
+	/* 0x00D: LCT Weeks MSB */
+	volatile uint8_t LCTWEEKM;
+#endif
+};
+
+#define NPCX_LCTCONT_LCTEN        0
+#define NPCX_LCTCONT_LCTEVEN      1
+#define NPCX_LCTCONT_LCTPSLEN     2
+#define NPCX_LCTCONT_LCT_CLK_EN   6
+#define NPCX_LCTCONT_LCT_VSBY_PWR 7
+#define NPCX_LCTSTAT_LCTEVST      0
 
 #endif /* _NUVOTON_NPCX_REG_DEF_H */

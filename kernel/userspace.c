@@ -347,16 +347,15 @@ static struct k_object *dynamic_object_create(enum k_objects otype, size_t align
 #ifdef CONFIG_GEN_PRIV_STACKS
 		struct z_stack_data *stack_data = (struct z_stack_data *)
 			((uint8_t *)dyn->data + adjusted_size - sizeof(*stack_data));
-		stack_data->priv = (uint8_t *)dyn->data;
-		stack_data->size = adjusted_size;
-		dyn->kobj.data.stack_data = stack_data;
 #if defined(CONFIG_ARM_MPU) || defined(CONFIG_ARC_MPU) || defined(CONFIG_RISCV_PMP)
-		dyn->kobj.name = (void *)ROUND_UP(
-			  ((uint8_t *)dyn->data + CONFIG_PRIVILEGED_STACK_SIZE),
+		stack_data->priv = (void *)ROUND_UP(((uint8_t *)dyn->data + size),
 			  Z_THREAD_STACK_OBJ_ALIGN(size));
 #else
-		dyn->kobj.name = dyn->data;
+		stack_data->priv = (uint8_t *)dyn->data;
 #endif /* CONFIG_ARM_MPU || CONFIG_ARC_MPU || CONFIG_RISCV_PMP */
+		stack_data->size = adjusted_size;
+		dyn->kobj.data.stack_data = stack_data;
+		dyn->kobj.name = dyn->data;
 #else
 		dyn->kobj.name = dyn->data;
 		dyn->kobj.data.stack_size = adjusted_size;
@@ -783,6 +782,11 @@ int k_object_validate(struct k_object *ko, enum k_objects otype,
 	}
 
 	return 0;
+}
+
+int z_impl_k_object_access_check(const void *object)
+{
+	return k_object_validate(k_object_find(object), K_OBJ_ANY, _OBJ_INIT_ANY);
 }
 
 void k_object_init(const void *obj)

@@ -1,7 +1,7 @@
 /* goep.c - Bluetooth Generic Object Exchange Profile handling */
 
 /*
- * Copyright 2024-2025 NXP
+ * Copyright 2024-2026 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -61,11 +61,6 @@ static void goep_rfcomm_connected(struct bt_rfcomm_dlc *dlc)
 	}
 	goep->obex.rx.mtu = dlc->mtu;
 	goep->obex.tx.mtu = dlc->mtu;
-
-	/* Set MOPL of RX to MTU by default */
-	goep->obex.rx.mopl = dlc->mtu;
-	/* Set MOPL of TX to MTU by default to avoid the OBEX connect req cannot be sent. */
-	goep->obex.tx.mopl = dlc->mtu;
 
 	atomic_set(&goep->_state, BT_GOEP_TRANSPORT_CONNECTED);
 
@@ -164,40 +159,18 @@ static const struct bt_obex_transport_ops goep_rfcomm_transport_ops = {
 	.disconnect = goep_rfcomm_disconnect,
 };
 
-static int goep_rfcomm_accept(struct bt_conn *conn, struct bt_rfcomm_server *server,
-			      struct bt_rfcomm_dlc **dlc)
+static int goep_rfcomm_init(struct bt_conn *conn, struct bt_goep *goep)
 {
-	struct bt_goep_transport_rfcomm_server *rfcomm_server;
-	struct bt_goep *goep;
 	uint32_t mtu;
 	uint32_t hdr_size;
 	int err;
-
-	rfcomm_server = CONTAINER_OF(server, struct bt_goep_transport_rfcomm_server, rfcomm);
-
-	if (!sys_slist_find(&goep_rfcomm_server, &rfcomm_server->node, NULL)) {
-		LOG_WRN("Invalid rfcomm server");
-		return -ENOMEM;
-	}
-
-	err = rfcomm_server->accept(conn, rfcomm_server, &goep);
-	if (err) {
-		LOG_DBG("Incoming connection rejected");
-		return err;
-	}
-
-	if (!goep || !goep->transport_ops || !goep->obex.server_ops ||
-	    !goep->obex.server_ops->connect || !goep->obex.server_ops->disconnect) {
-		LOG_DBG("Invalid parameter");
-		return -EINVAL;
-	}
 
 	hdr_size = sizeof(struct bt_l2cap_hdr);
 	hdr_size += BT_RFCOMM_HDR_SIZE + BT_RFCOMM_FCS_SIZE;
 
 	mtu = CONFIG_BT_GOEP_RFCOMM_MTU - hdr_size;
 	/* Use default MTU if it is not given */
-	if (!goep->obex.rx.mtu) {
+	if (goep->obex.rx.mtu == 0) {
 		goep->obex.rx.mtu = mtu;
 	}
 
@@ -213,17 +186,52 @@ static int goep_rfcomm_accept(struct bt_conn *conn, struct bt_rfcomm_server *ser
 	}
 
 	err = bt_obex_reg_transport(&goep->obex, &goep_rfcomm_transport_ops);
-	if (err) {
-		LOG_WRN("Fail to reg transport ops");
+	if (err != 0) {
+		LOG_ERR("Fail to reg transport ops");
 		return err;
 	}
 
 	goep->_goep_v2 = false;
 	goep->_acl = conn;
-	*dlc = &goep->_transport.dlc;
 	goep->_transport.dlc.mtu = goep->obex.rx.mtu;
 	goep->_transport.dlc.ops = &goep_rfcomm_ops;
 	goep->_transport.dlc.required_sec_level = BT_SECURITY_L2;
+
+	return 0;
+}
+
+static int goep_rfcomm_accept(struct bt_conn *conn, struct bt_rfcomm_server *server,
+			      struct bt_rfcomm_dlc **dlc)
+{
+	struct bt_goep_transport_rfcomm_server *rfcomm_server;
+	struct bt_goep *goep;
+	int err;
+
+	rfcomm_server = CONTAINER_OF(server, struct bt_goep_transport_rfcomm_server, rfcomm);
+
+	if (!sys_slist_find(&goep_rfcomm_server, &rfcomm_server->node, NULL)) {
+		LOG_WRN("Invalid rfcomm server");
+		return -ENOMEM;
+	}
+
+	err = rfcomm_server->accept(conn, rfcomm_server, &goep);
+	if (err) {
+		LOG_DBG("Incoming connection rejected");
+		return err;
+	}
+
+	if (goep == NULL || goep->transport_ops == NULL) {
+		LOG_DBG("Invalid parameter");
+		return -EINVAL;
+	}
+
+	err = goep_rfcomm_init(conn, goep);
+	if (err != 0) {
+		LOG_ERR("Fail to init goep");
+		return err;
+	}
+
+	*dlc = &goep->_transport.dlc;
 
 	atomic_set(&goep->_state, BT_GOEP_TRANSPORT_CONNECTING);
 
@@ -260,50 +268,21 @@ int bt_goep_transport_rfcomm_server_register(struct bt_goep_transport_rfcomm_ser
 int bt_goep_transport_rfcomm_connect(struct bt_conn *conn, struct bt_goep *goep, uint8_t channel)
 {
 	int err;
-	uint32_t mtu;
-	uint32_t hdr_size;
 
-	if (!conn || !goep || !goep->transport_ops || !goep->obex.client_ops ||
-	    !goep->obex.client_ops->connect || !goep->obex.client_ops->disconnect) {
+	if (conn == NULL || goep == NULL || goep->transport_ops == NULL) {
 		LOG_DBG("Invalid parameter");
 		return -EINVAL;
 	}
 
-	hdr_size = sizeof(struct bt_l2cap_hdr);
-	hdr_size += BT_RFCOMM_HDR_SIZE + BT_RFCOMM_FCS_SIZE;
-
-	mtu = CONFIG_BT_GOEP_RFCOMM_MTU - hdr_size;
-	/* Use default MTU if it is not given */
-	if (!goep->obex.rx.mtu) {
-		goep->obex.rx.mtu = mtu;
-	}
-
-	if (goep->obex.rx.mtu < GOEP_MIN_MTU) {
-		LOG_WRN("GOEP RFCOMM MTU less than minimum size (%d < %d)", goep->obex.rx.mtu,
-			GOEP_MIN_MTU);
-		goep->obex.rx.mtu = GOEP_MIN_MTU;
-	}
-
-	if (goep->obex.rx.mtu > mtu) {
-		LOG_WRN("GOEP RFCOMM MTU exceeds maximum size (%d > %d)", goep->obex.rx.mtu, mtu);
-		goep->obex.rx.mtu = mtu;
-	}
-
-	err = bt_obex_reg_transport(&goep->obex, &goep_rfcomm_transport_ops);
-	if (err) {
-		LOG_WRN("Fail to reg transport ops");
+	err = goep_rfcomm_init(conn, goep);
+	if (err != 0) {
+		LOG_ERR("Fail to init goep");
 		return err;
 	}
 
-	goep->_goep_v2 = false;
-	goep->_acl = conn;
-	goep->_transport.dlc.mtu = goep->obex.rx.mtu;
-	goep->_transport.dlc.ops = &goep_rfcomm_ops;
-	goep->_transport.dlc.required_sec_level = BT_SECURITY_L2;
-
 	err = bt_rfcomm_dlc_connect(conn, &goep->_transport.dlc, channel);
-	if (err) {
-		LOG_WRN("Fail to create RFCOMM connection");
+	if (err != 0) {
+		LOG_ERR("Fail to create RFCOMM connection");
 		return err;
 	}
 
@@ -342,6 +321,9 @@ int bt_goep_transport_rfcomm_disconnect(struct bt_goep *goep)
 /* L2CAP Server list */
 static sys_slist_t goep_l2cap_server = SYS_SLIST_STATIC_INIT(&goep_l2cap_server);
 
+NET_BUF_POOL_DEFINE(goep_rx_pool, BT_BUF_ACL_RX_COUNT, BT_BUF_ACL_SIZE(CONFIG_BT_BUF_ACL_RX_SIZE),
+		    CONFIG_BT_CONN_TX_USER_DATA_SIZE, NULL);
+
 static int goep_l2cap_recv(struct bt_l2cap_chan *chan, struct net_buf *buf)
 {
 	struct bt_goep *goep = CONTAINER_OF(chan, struct bt_goep, _transport.chan.chan);
@@ -371,11 +353,6 @@ static void goep_l2cap_connected(struct bt_l2cap_chan *chan)
 
 	goep->obex.rx.mtu = goep->_transport.chan.rx.mtu;
 	goep->obex.tx.mtu = goep->_transport.chan.tx.mtu;
-
-	/* Set MOPL of RX to MTU by default */
-	goep->obex.rx.mopl = goep->_transport.chan.rx.mtu;
-	/* Set MOPL of TX to MTU by default to avoid the OBEX connect req cannot be sent. */
-	goep->obex.tx.mopl = goep->_transport.chan.tx.mtu;
 
 	atomic_set(&goep->_state, BT_GOEP_TRANSPORT_CONNECTED);
 
@@ -410,7 +387,20 @@ static void goep_l2cap_disconnected(struct bt_l2cap_chan *chan)
 	}
 }
 
+static struct net_buf *l2cap_alloc_buf(struct bt_l2cap_chan *chan)
+{
+	struct net_buf *buf;
+
+	buf = net_buf_alloc(&goep_rx_pool, K_FOREVER);
+	if (buf == NULL) {
+		LOG_ERR("Failed to allocate buffer");
+	}
+
+	return buf;
+}
+
 static const struct bt_l2cap_chan_ops goep_l2cap_ops = {
+	.alloc_buf = l2cap_alloc_buf,
 	.recv = goep_l2cap_recv,
 	.connected = goep_l2cap_connected,
 	.disconnected = goep_l2cap_disconnected,
@@ -463,13 +453,63 @@ static const struct bt_obex_transport_ops goep_l2cap_transport_ops = {
 	.disconnect = goep_l2cap_disconnect,
 };
 
+static int goep_l2cap_init(struct bt_conn *conn, struct bt_goep *goep)
+{
+	uint32_t mtu;
+	uint32_t hdr_size;
+	int err;
+
+	hdr_size = sizeof(struct bt_l2cap_hdr);
+
+	mtu = CONFIG_BT_GOEP_L2CAP_MTU - hdr_size;
+	/* Use default MTU if it is not given */
+	if (goep->obex.rx.mtu == 0) {
+		goep->obex.rx.mtu = mtu;
+	}
+
+	if (goep->obex.rx.mtu < GOEP_MIN_MTU) {
+		LOG_WRN("GOEP L2CAP MTU less than minimum size (%d < %d)", goep->obex.rx.mtu,
+			GOEP_MIN_MTU);
+		goep->obex.rx.mtu = GOEP_MIN_MTU;
+	}
+
+	if (goep->obex.rx.mtu > mtu) {
+		LOG_WRN("GOEP L2CAP MTU exceeds maximum size (%d > %d)", goep->obex.rx.mtu, mtu);
+		goep->obex.rx.mtu = mtu;
+	}
+
+	err = bt_obex_reg_transport(&goep->obex, &goep_l2cap_transport_ops);
+	if (err != 0) {
+		LOG_ERR("Fail to reg transport ops");
+		return err;
+	}
+
+	goep->_goep_v2 = true;
+	goep->_acl = conn;
+	goep->_transport.chan.rx.mode = BT_L2CAP_BR_LINK_MODE_ERET;
+	goep->_transport.chan.rx.optional = false;
+	goep->_transport.chan.rx.max_transmit = 3;
+	goep->_transport.chan.rx.mtu = goep->obex.rx.mtu;
+	goep->_transport.chan.rx.extended_control = false;
+	/*
+	 * There is an issue found that the FCS option is not correctly set when connecting to an
+	 * iphone when the profile is PBAP or MAP. The issue is that iphone expects the No FCS
+	 * option will be applied while the 'No FCS' option is not added in an
+	 * L2CAP_CONFIGURATION_REQ packet sent by the iphone.
+	 * Force 16 bits FCS option for enhance retransmission mode by default.
+	 */
+	goep->_transport.chan.rx.fcs = BT_L2CAP_BR_FCS_16BIT;
+	goep->_transport.chan.chan.ops = &goep_l2cap_ops;
+	goep->_transport.chan.required_sec_level = BT_SECURITY_L2;
+
+	return 0;
+}
+
 static int goep_l2cap_accept(struct bt_conn *conn, struct bt_l2cap_server *server,
 			     struct bt_l2cap_chan **chan)
 {
 	struct bt_goep_transport_l2cap_server *l2cap_server;
 	struct bt_goep *goep;
-	uint32_t mtu;
-	uint32_t hdr_size;
 	int err;
 
 	l2cap_server = CONTAINER_OF(server, struct bt_goep_transport_l2cap_server, l2cap);
@@ -485,48 +525,18 @@ static int goep_l2cap_accept(struct bt_conn *conn, struct bt_l2cap_server *serve
 		return err;
 	}
 
-	if (!goep || !goep->transport_ops || !goep->obex.server_ops ||
-	    !goep->obex.server_ops->connect || !goep->obex.server_ops->disconnect) {
+	if (goep == NULL || goep->transport_ops == NULL) {
 		LOG_DBG("Invalid parameter");
 		return -EINVAL;
 	}
 
-	hdr_size = sizeof(struct bt_l2cap_hdr);
-
-	mtu = CONFIG_BT_GOEP_L2CAP_MTU - hdr_size;
-	/* Use default MTU if it is not given */
-	if (!goep->obex.rx.mtu) {
-		goep->obex.rx.mtu = mtu;
-	}
-
-	if (goep->obex.rx.mtu < GOEP_MIN_MTU) {
-		LOG_WRN("GOEP RFCOMM MTU less than minimum size (%d < %d)", goep->obex.rx.mtu,
-			GOEP_MIN_MTU);
-		goep->obex.rx.mtu = GOEP_MIN_MTU;
-	}
-
-	if (goep->obex.rx.mtu > mtu) {
-		LOG_WRN("GOEP RFCOMM MTU exceeds maximum size (%d > %d)", goep->obex.rx.mtu, mtu);
-		goep->obex.rx.mtu = mtu;
-	}
-
-	err = bt_obex_reg_transport(&goep->obex, &goep_l2cap_transport_ops);
-	if (err) {
-		LOG_WRN("Fail to reg transport ops");
+	err = goep_l2cap_init(conn, goep);
+	if (err != 0) {
+		LOG_ERR("Fail to init goep");
 		return err;
 	}
 
-	goep->_goep_v2 = true;
-	goep->_acl = conn;
 	*chan = &goep->_transport.chan.chan;
-	goep->_transport.chan.rx.mode = BT_L2CAP_BR_LINK_MODE_ERET;
-	goep->_transport.chan.rx.optional = false;
-	goep->_transport.chan.rx.max_transmit = 3;
-	goep->_transport.chan.rx.mtu = goep->obex.rx.mtu;
-	goep->_transport.chan.rx.extended_control = false;
-	goep->_transport.chan.chan.ops = &goep_l2cap_ops;
-	goep->_transport.chan.required_sec_level = BT_SECURITY_L2;
-
 	atomic_set(&goep->_state, BT_GOEP_TRANSPORT_CONNECTING);
 
 	return 0;
@@ -563,11 +573,8 @@ int bt_goep_transport_l2cap_connect(struct bt_conn *conn, struct bt_goep *goep, 
 {
 	int err;
 	uint32_t state;
-	uint32_t mtu;
-	uint32_t hdr_size;
 
-	if (!conn || !goep || !goep->transport_ops || !goep->obex.client_ops ||
-	    !goep->obex.client_ops->connect || !goep->obex.client_ops->disconnect) {
+	if (conn == NULL || goep == NULL || goep->transport_ops == NULL) {
 		LOG_DBG("Invalid parameter");
 		return -EINVAL;
 	}
@@ -578,44 +585,15 @@ int bt_goep_transport_l2cap_connect(struct bt_conn *conn, struct bt_goep *goep, 
 		return -EBUSY;
 	}
 
-	hdr_size = sizeof(struct bt_l2cap_hdr);
-
-	mtu = CONFIG_BT_GOEP_L2CAP_MTU - hdr_size;
-	/* Use default MTU if it is not given */
-	if (!goep->obex.rx.mtu) {
-		goep->obex.rx.mtu = mtu;
-	}
-
-	if (goep->obex.rx.mtu < GOEP_MIN_MTU) {
-		LOG_WRN("GOEP RFCOMM MTU less than minimum size (%d < %d)", goep->obex.rx.mtu,
-			GOEP_MIN_MTU);
-		goep->obex.rx.mtu = GOEP_MIN_MTU;
-	}
-
-	if (goep->obex.rx.mtu > mtu) {
-		LOG_WRN("GOEP RFCOMM MTU exceeds maximum size (%d > %d)", goep->obex.rx.mtu, mtu);
-		goep->obex.rx.mtu = mtu;
-	}
-
-	err = bt_obex_reg_transport(&goep->obex, &goep_l2cap_transport_ops);
-	if (err) {
-		LOG_WRN("Fail to reg transport ops");
+	err = goep_l2cap_init(conn, goep);
+	if (err != 0) {
+		LOG_ERR("Fail to init goep");
 		return err;
 	}
 
-	goep->_goep_v2 = true;
-	goep->_acl = conn;
-	goep->_transport.chan.rx.mode = BT_L2CAP_BR_LINK_MODE_ERET;
-	goep->_transport.chan.rx.optional = false;
-	goep->_transport.chan.rx.max_transmit = 3;
-	goep->_transport.chan.rx.mtu = goep->obex.rx.mtu;
-	goep->_transport.chan.rx.extended_control = false;
-	goep->_transport.chan.chan.ops = &goep_l2cap_ops;
-	goep->_transport.chan.required_sec_level = BT_SECURITY_L2;
-
 	err = bt_l2cap_chan_connect(conn, &goep->_transport.chan.chan, psm);
-	if (err) {
-		LOG_WRN("Fail to create L2CAP connection");
+	if (err != 0) {
+		LOG_ERR("Fail to create L2CAP connection");
 		return err;
 	}
 

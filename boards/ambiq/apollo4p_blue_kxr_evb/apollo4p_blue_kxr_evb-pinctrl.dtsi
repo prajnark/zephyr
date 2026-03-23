@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <dt-bindings/pinctrl/ambiq-apollo4-pinctrl.h>
+#include <zephyr/dt-bindings/pinctrl/ambiq-apollo4-pinctrl.h>
 
 &pinctrl {
 	uart0_default: uart0_default {
@@ -190,6 +190,13 @@
 	xo32k_default: xo32k_default {
 		group1 {
 			pinmux = <XT32KHZ_P4>;
+			drive-strength = "0.1";
+		};
+	};
+
+	adc0_default: adc0_default {
+		group1 {
+			pinmux = <ADCSE4_P15>, <ADCSE6_P13>;
 			drive-strength = "0.1";
 		};
 	};

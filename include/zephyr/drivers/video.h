@@ -19,7 +19,7 @@
  * @brief Interfaces for video devices.
  * @defgroup video_interface Video
  * @since 2.1
- * @version 1.1.0
+ * @version 1.3.0
  * @ingroup io_interfaces
  * @{
  */
@@ -34,12 +34,6 @@
 extern "C" {
 #endif
 
-/*
- * Flag used by @ref video_caps structure to indicate endpoint operates on
- * buffers the size of the video frame
- */
-#define LINE_COUNT_HEIGHT (-1)
-
 struct video_control;
 
 /**
@@ -52,9 +46,21 @@ struct video_control;
  */
 enum video_buf_type {
 	/** input buffer type */
-	VIDEO_BUF_TYPE_INPUT,
+	VIDEO_BUF_TYPE_INPUT = 1,
 	/** output buffer type */
-	VIDEO_BUF_TYPE_OUTPUT,
+	VIDEO_BUF_TYPE_OUTPUT = 2,
+};
+
+/**
+ * @brief video_buf_memory enum
+ *
+ * Memory type of a buffer
+ */
+enum video_buf_memory {
+	/** buffer is allocated from the internal video heap */
+	VIDEO_MEMORY_INTERNAL = 1,
+	/** buffer is allocated from outside */
+	VIDEO_MEMORY_EXTERNAL = 2,
 };
 
 /**
@@ -79,6 +85,17 @@ struct video_format {
 	 * the next row (>=width).
 	 */
 	uint32_t pitch;
+	/**
+	 * @brief size of the buffer in bytes, need to be set by the drivers
+	 *
+	 * For uncompressed formats, this is the size of the raw data buffer in bytes,
+	 * which could be the whole raw image or a portion of the raw image in cases
+	 * the receiver / dma supports it.
+	 *
+	 * For compressed formats, this is the maximum number of bytes required to
+	 * hold a complete compressed frame, estimated for the worst case.
+	 */
+	uint32_t size;
 };
 
 /**
@@ -117,22 +134,8 @@ struct video_caps {
 	 * the stream.
 	 */
 	uint8_t min_vbuf_count;
-	/** Denotes minimum line count of a video buffer that this endpoint
-	 * can fill or process. Each line is expected to consume the number
-	 * of bytes the selected video format's pitch uses, so the video
-	 * buffer must be at least `pitch` * `min_line_count` bytes.
-	 * `LINE_COUNT_HEIGHT` is a special value, indicating the endpoint
-	 * only supports video buffers with at least enough bytes to store
-	 * a full video frame
-	 */
-	int16_t min_line_count;
-	/**
-	 * Denotes maximum line count of a video buffer that this endpoint
-	 * can fill or process. Similar constraints to `min_line_count`,
-	 * but `LINE_COUNT_HEIGHT` indicates that the endpoint will never
-	 * fill or process more than a full video frame in one video buffer.
-	 */
-	int16_t max_line_count;
+	/** requirement on the buffer alignment, in bytes */
+	size_t buf_align;
 };
 
 /**
@@ -146,10 +149,12 @@ struct video_buffer {
 	void *driver_data;
 	/** type of the buffer */
 	enum video_buf_type type;
+	/** type of the buffer memory, see @ref video_buf_memory */
+	uint8_t memory;
 	/** pointer to the start of the buffer. */
 	uint8_t *buffer;
-	/** index of the buffer, optionally set by the application */
-	uint8_t index;
+	/** index of the buffer in the video buffer pool */
+	uint16_t index;
 	/** size of the buffer in bytes. */
 	uint32_t size;
 	/** number of bytes occupied by the valid data in the buffer. */
@@ -364,6 +369,18 @@ typedef int (*video_api_ctrl_t)(const struct device *dev, uint32_t cid);
 typedef int (*video_api_get_caps_t)(const struct device *dev, struct video_caps *caps);
 
 /**
+ * @typedef video_api_transform_cap_t
+ * @brief Function pointer type for transforming a @ref video_format_cap from one end
+ * to the other end of a m2m video device.
+ *
+ * See @ref video_transform_cap for argument descriptions.
+ */
+typedef int (*video_api_transform_cap_t)(const struct device *const dev,
+					 const struct video_format_cap *const cap,
+					 struct video_format_cap *const res_cap,
+					 enum video_buf_type type, uint16_t ind);
+
+/**
  * @typedef video_api_set_signal_t
  * @brief Register/Unregister poll signal for buffer events.
  *
@@ -397,6 +414,8 @@ __subsystem struct video_driver_api {
 	video_api_enum_frmival_t enum_frmival;
 	video_api_selection_t set_selection;
 	video_api_selection_t get_selection;
+	/** Transform capability from one end to the other end of an m2m device */
+	video_api_transform_cap_t transform_cap;
 };
 
 /**
@@ -416,8 +435,9 @@ static inline int video_set_format(const struct device *dev, struct video_format
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(fmt != NULL);
+	if (dev == NULL || fmt == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->set_format == NULL) {
@@ -441,8 +461,9 @@ static inline int video_get_format(const struct device *dev, struct video_format
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(fmt != NULL);
+	if (dev == NULL || fmt == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->get_format == NULL) {
@@ -472,8 +493,9 @@ static inline int video_set_frmival(const struct device *dev, struct video_frmiv
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(frmival != NULL);
+	if (dev == NULL || frmival == NULL) {
+		return -EINVAL;
+	}
 
 	if (frmival->numerator == 0 || frmival->denominator == 0) {
 		return -EINVAL;
@@ -504,8 +526,9 @@ static inline int video_get_frmival(const struct device *dev, struct video_frmiv
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(frmival != NULL);
+	if (dev == NULL || frmival == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->get_frmival == NULL) {
@@ -536,9 +559,9 @@ static inline int video_enum_frmival(const struct device *dev, struct video_frmi
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(fie != NULL);
-	__ASSERT_NO_MSG(fie->format != NULL);
+	if (dev == NULL || fie == NULL || fie->format == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->enum_frmival == NULL) {
@@ -561,21 +584,7 @@ static inline int video_enum_frmival(const struct device *dev, struct video_frmi
  * @retval -EINVAL If parameters are invalid.
  * @retval -EIO General input / output error.
  */
-static inline int video_enqueue(const struct device *dev, struct video_buffer *buf)
-{
-	const struct video_driver_api *api = (const struct video_driver_api *)dev->api;
-
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(buf != NULL);
-	__ASSERT_NO_MSG(buf->buffer != NULL);
-
-	api = (const struct video_driver_api *)dev->api;
-	if (api->enqueue == NULL) {
-		return -ENOSYS;
-	}
-
-	return api->enqueue(dev, buf);
-}
+int video_enqueue(const struct device *dev, struct video_buffer *buf);
 
 /**
  * @brief Dequeue a video buffer.
@@ -596,8 +605,9 @@ static inline int video_dequeue(const struct device *dev, struct video_buffer **
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(buf != NULL);
+	if (dev == NULL || buf == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->dequeue == NULL) {
@@ -624,7 +634,9 @@ static inline int video_flush(const struct device *dev, bool cancel)
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
+	if (dev == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->flush == NULL) {
@@ -646,14 +658,17 @@ static inline int video_flush(const struct device *dev, bool cancel)
  * @param dev Pointer to the device structure.
  * @param type The type of the buffers stream to start.
  *
- * @retval 0 Is successful.
+ * @retval 0 Successful.
+ * @retval -EINVAL Parameters are invalid.
  * @retval -EIO General input / output error.
  */
 static inline int video_stream_start(const struct device *dev, enum video_buf_type type)
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
+	if (dev == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->set_stream == NULL) {
@@ -672,7 +687,8 @@ static inline int video_stream_start(const struct device *dev, enum video_buf_ty
  * @param dev Pointer to the device structure.
  * @param type The type of the buffers stream to stop.
  *
- * @retval 0 Is successful.
+ * @retval 0 Successful.
+ * @retval -EINVAL Parameters are invalid.
  * @retval -EIO General input / output error.
  */
 static inline int video_stream_stop(const struct device *dev, enum video_buf_type type)
@@ -680,7 +696,9 @@ static inline int video_stream_stop(const struct device *dev, enum video_buf_typ
 	const struct video_driver_api *api;
 	int ret;
 
-	__ASSERT_NO_MSG(dev != NULL);
+	if (dev == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->set_stream == NULL) {
@@ -705,8 +723,10 @@ static inline int video_get_caps(const struct device *dev, struct video_caps *ca
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(caps != NULL);
+	if (dev == NULL || caps == NULL ||
+	    (caps->type != VIDEO_BUF_TYPE_INPUT && caps->type != VIDEO_BUF_TYPE_OUTPUT)) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->get_caps == NULL) {
@@ -714,6 +734,60 @@ static inline int video_get_caps(const struct device *dev, struct video_caps *ca
 	}
 
 	return api->get_caps(dev, caps);
+}
+
+/**
+ * @brief Transform a video format capability from one end to the other end of a m2m video device.
+ *
+ * This function transforms a @ref video_format_cap from one end to the other end of an m2m video
+ * device. It allows applications to iteratively get all the supported capabilities on one end of
+ * the device given a single input capability on the other end.
+ *
+ * Applications pass the addresses of a single input cap and a single res_cap together with the
+ * type of the res_cap and the index (started from 0) to iterate through to the function. The
+ * driver fills the res_cap structure and return 0 each time. Index should be incremented to get
+ * the next res_cap until the function returns an errno e.g., -EINVAL. For example:
+ *
+ * @code{.c}
+ *  struct video_format_cap cap = {.pixelformat = VIDEO_PIX_FMT_RGB565};
+ *  struct video_format_cap res_cap = {0};
+ *  uint8_t ind = 0;
+ *  while (video_transform_cap(dev, &cap, &res_cap, VIDEO_BUF_TYPE_OUTPUT, ind) == 0) {
+ *		// Process output_cap here
+ *		ind++;
+ *  }
+ * @endcode
+ *
+ * @param dev Pointer to the device structure.
+ * @param cap Pointer to the source video format capability structure.
+ * @param res_cap Pointer to the resulting video format capability structure, filled by the driver.
+ * @param type The @ref video_buf_type of the resulting transformed cap.
+ * @param ind Index of the resulting transformed cap.
+ *
+ * @retval 0 Success.
+ * @retval -ENOSYS API is not implemented.
+ * @retval -EINVAL Parameters are invalid.
+ * @retval -ENOTSUP The transformation is not supported.
+ * @retval -EIO General input / output error.
+ */
+static inline int video_transform_cap(const struct device *const dev,
+				      const struct video_format_cap *const cap,
+				      struct video_format_cap *const res_cap,
+				      enum video_buf_type type, uint16_t ind)
+{
+	const struct video_driver_api *api;
+
+	if (dev == NULL || cap == NULL || res_cap == NULL ||
+	    (type != VIDEO_BUF_TYPE_INPUT && type != VIDEO_BUF_TYPE_OUTPUT)) {
+		return -EINVAL;
+	}
+
+	api = (const struct video_driver_api *)dev->api;
+	if (api->transform_cap == NULL) {
+		return -ENOSYS;
+	}
+
+	return api->transform_cap(dev, cap, res_cap, type, ind);
 }
 
 /**
@@ -797,8 +871,9 @@ static inline int video_set_signal(const struct device *dev, struct k_poll_signa
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(sig != NULL);
+	if (dev == NULL || sig == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->set_signal == NULL) {
@@ -831,8 +906,9 @@ static inline int video_set_selection(const struct device *dev, struct video_sel
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(sel != NULL);
+	if (dev == NULL || sel == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->set_selection == NULL) {
@@ -863,8 +939,9 @@ static inline int video_get_selection(const struct device *dev, struct video_sel
 {
 	const struct video_driver_api *api;
 
-	__ASSERT_NO_MSG(dev != NULL);
-	__ASSERT_NO_MSG(sel != NULL);
+	if (dev == NULL || sel == NULL) {
+		return -EINVAL;
+	}
 
 	api = (const struct video_driver_api *)dev->api;
 	if (api->get_selection == NULL) {
@@ -881,7 +958,7 @@ static inline int video_get_selection(const struct device *dev, struct video_sel
  * @param align Alignment of the requested memory, must be a power of two.
  * @param timeout Timeout duration or K_NO_WAIT
  *
- * @retval pointer to allocated video buffer
+ * @return pointer to allocated video buffer
  */
 struct video_buffer *video_buffer_aligned_alloc(size_t size, size_t align, k_timeout_t timeout);
 
@@ -891,7 +968,7 @@ struct video_buffer *video_buffer_aligned_alloc(size_t size, size_t align, k_tim
  * @param size Size of the video buffer (in bytes).
  * @param timeout Timeout duration or K_NO_WAIT
  *
- * @retval pointer to allocated video buffer
+ * @return pointer to allocated video buffer
  */
 struct video_buffer *video_buffer_alloc(size_t size, k_timeout_t timeout);
 
@@ -899,8 +976,10 @@ struct video_buffer *video_buffer_alloc(size_t size, k_timeout_t timeout);
  * @brief Release a video buffer.
  *
  * @param buf Pointer to the video buffer to release.
+ *
+ * @retval 0 on success or a negative errno on failure
  */
-void video_buffer_release(struct video_buffer *buf);
+int video_buffer_release(struct video_buffer *buf);
 
 /**
  * @brief Search for a format that matches in a list of capabilities
@@ -924,8 +1003,9 @@ int video_format_caps_index(const struct video_format_cap *fmts, const struct vi
  */
 static inline uint64_t video_frmival_nsec(const struct video_frmival *frmival)
 {
-	__ASSERT_NO_MSG(frmival != NULL);
-	__ASSERT_NO_MSG(frmival->denominator != 0);
+	if (frmival == NULL || frmival->denominator == 0) {
+		return -EINVAL;
+	}
 
 	return (uint64_t)NSEC_PER_SEC * frmival->numerator / frmival->denominator;
 }
@@ -937,9 +1017,9 @@ static inline uint64_t video_frmival_nsec(const struct video_frmival *frmival)
  * @param desired The frame interval for which find the closest match
  * @param match The resulting frame interval closest to @p desired
  */
-void video_closest_frmival_stepwise(const struct video_frmival_stepwise *stepwise,
-				    const struct video_frmival *desired,
-				    struct video_frmival *match);
+int video_closest_frmival_stepwise(const struct video_frmival_stepwise *stepwise,
+				   const struct video_frmival *desired,
+				   struct video_frmival *match);
 
 /**
  * @brief Find the closest match to a frame interval value within a video device.
@@ -958,7 +1038,7 @@ void video_closest_frmival_stepwise(const struct video_frmival_stepwise *stepwis
  * @param dev Video device to query.
  * @param match Frame interval enumerator with the query, and loaded with the result.
  */
-void video_closest_frmival(const struct device *dev, struct video_frmival_enum *match);
+int video_closest_frmival(const struct device *dev, struct video_frmival_enum *match);
 
 /**
  * @brief Return the link-frequency advertised by a device
@@ -976,6 +1056,61 @@ void video_closest_frmival(const struct device *dev, struct video_frmival_enum *
  * @param lane_nb Number of CSI-2 lanes used
  */
 int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t lane_nb);
+
+/**
+ * @brief Estimate the size and pitch in bytes of a @ref video_format
+ *
+ * This helper should only be used by drivers that support the whole image frame.
+ *
+ * For uncompressed formats, it gives the actual size and pitch of the
+ * whole raw image without any padding.
+ *
+ * For compressed formats, it gives a rough estimate size of a complete
+ * compressed frame.
+ *
+ * @param fmt Pointer to the video format structure
+ * @return 0 on success, otherwise a negative errno code
+ */
+int video_estimate_fmt_size(struct video_format *fmt);
+
+/**
+ * @brief Set compose rectangle (if applicable) prior to setting format
+ *
+ * Some devices expose compose capabilities, allowing them to apply a transformation
+ * (downscale / upscale) to the frame. For those devices, it is necessary to set the
+ * compose rectangle before being able to apply the frame format (which must have the
+ * same width / height as the compose rectangle width / height).
+ * In order to allow non-compose aware application to be able to control such devices,
+ * introduce a helper which, if available, will apply the compose rectangle prior to
+ * setting the format.
+ *
+ * @param dev Pointer to the video device struct to set format
+ * @param fmt Pointer to a video format struct.
+ *
+ * @retval 0 Is successful.
+ * @retval -EINVAL If parameters are invalid.
+ * @retval -ENOTSUP If format is not supported.
+ * @retval -EIO General input / output error.
+ */
+int video_set_compose_format(const struct device *dev, struct video_format *fmt);
+
+/**
+ * @brief Transfer a buffer between 2 video device
+ *
+ * Helper function which dequeues a buffer from a source device and enqueues it into a
+ * sink device, changing its buffer type between the two.
+ *
+ * @param src		Video device from where buffer is dequeued (source)
+ * @param sink		Video device into which the buffer is queued (sink)
+ * @param src_type	Video buffer type on the source device
+ * @param sink_type	Video buffer type on the sink device
+ * @param timeout	Timeout to be applied on dequeue
+ *
+ * @return 0 on success, otherwise a negative errno code
+ */
+int video_transfer_buffer(const struct device *src, const struct device *sink,
+			  enum video_buf_type src_type, enum video_buf_type sink_type,
+			  k_timeout_t timeout);
 
 /**
  * @defgroup video_pixel_formats Video pixel formats
@@ -1035,40 +1170,89 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
  */
 
 /**
- * @code{.unparsed}
- *   0          1          2          3
- * | Bbbbbbbb | Gggggggg | Bbbbbbbb | Gggggggg | ...
- * | Gggggggg | Rrrrrrrr | Gggggggg | Rrrrrrrr | ...
- * @endcode
+ * @brief Repeat a macro for every Bayer format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
  */
-#define VIDEO_PIX_FMT_SBGGR8 VIDEO_FOURCC('B', 'A', '8', '1')
+#define VIDEO_FOREACH_BAYER(X, ...)						\
+	VIDEO_FOREACH_BAYER_PADDED(X, __VA_ARGS__)				\
+	VIDEO_FOREACH_BAYER_MIPI_PACKED(X, __VA_ARGS__)				\
+	VIDEO_FOREACH_BAYER_NON_PACKED(X, __VA_ARGS__)
 
 /**
- * @code{.unparsed}
- *   0          1          2          3
- * | Gggggggg | Bbbbbbbb | Gggggggg | Bbbbbbbb | ...
- * | Rrrrrrrr | Gggggggg | Rrrrrrrr | Gggggggg | ...
- * @endcode
+ * @brief Repeat a macro for every Bayer padded format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
  */
-#define VIDEO_PIX_FMT_SGBRG8 VIDEO_FOURCC('G', 'B', 'R', 'G')
+#define VIDEO_FOREACH_BAYER_PADDED(X, ...)					\
+	X(VIDEO_PIX_FMT_SBGGR8P16, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGBRG8P16, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGRBG8P16, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SRGGB8P16, __VA_ARGS__)
 
 /**
+ * 8-bit bayer format, split in two 4-bit blocks each zero-padded, little endian.
+ *
  * @code{.unparsed}
- *   0          1          2          3
- * | Gggggggg | Rrrrrrrr | Gggggggg | Rrrrrrrr | ...
- * | Bbbbbbbb | Gggggggg | Bbbbbbbb | Gggggggg | ...
+ *   0                   1                   2                   3
+ * | 0000bbbb 0000Bbbb | 0000gggg 0000Gggg | 0000gggg 0000Gggg | 0000rrrr 0000Rrrr | ...
  * @endcode
  */
-#define VIDEO_PIX_FMT_SGRBG8 VIDEO_FOURCC('G', 'R', 'B', 'G')
+#define VIDEO_PIX_FMT_SBGGR8P16 VIDEO_FOURCC('p', 'B', '8', '2')
 
 /**
+ * 8-bit bayer format, split in two 4-bit blocks each zero-padded, little endian.
+ *
  * @code{.unparsed}
- *   0          1          2          3
- * | Rrrrrrrr | Gggggggg | Rrrrrrrr | Gggggggg | ...
- * | Gggggggg | Bbbbbbbb | Gggggggg | Bbbbbbbb | ...
+ *   0                   1                   2                   3
+ * | 0000gggg 0000Gggg | 0000bbbb 0000Bbbb | 0000rrrr 0000Rrrr | 0000gggg 0000Gggg | ...
  * @endcode
  */
-#define VIDEO_PIX_FMT_SRGGB8 VIDEO_FOURCC('R', 'G', 'G', 'B')
+#define VIDEO_PIX_FMT_SGBRG8P16 VIDEO_FOURCC('p', 'G', '8', '2')
+
+/**
+ * 8-bit bayer format, split in two 4-bit blocks each zero-padded, little endian.
+ *
+ * @code{.unparsed}
+ *   0                   1                   2                   3
+ * | 0000gggg 0000Gggg | 0000rrrr 0000Rrrr | 0000bbbb 0000Bbbb | 0000gggg 0000Gggg | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_SGRBG8P16 VIDEO_FOURCC('p', 'g', '8', '2')
+
+/**
+ * 8-bit bayer format, split in two 4-bit blocks each zero-padded, little endian.
+ *
+ * @code{.unparsed}
+ *   0                   1                   2                   3
+ * | 0000rrrr 0000Rrrr | 0000gggg 0000Gggg | 0000gggg 0000Gggg | 0000bbbb 0000Bbbb | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_SRGGB8P16 VIDEO_FOURCC('p', 'R', '8', '2')
+
+/**
+ * @brief Repeat a macro for every Bayer MIPI-packed format, passed as first parameter
+ *
+ * A red, green, blue channel for every pixel, other than 8-bit per pixel.
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_BAYER_MIPI_PACKED(X, ...)					\
+	X(VIDEO_PIX_FMT_SBGGR10P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGBRG10P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGRBG10P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SRGGB10P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SBGGR12P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGBRG12P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGRBG12P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SRGGB12P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SBGGR14P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGBRG14P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGRBG14P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SRGGB14P, __VA_ARGS__)
 
 /**
  * @code{.unparsed}
@@ -1177,6 +1361,71 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
  * @endcode
  */
 #define VIDEO_PIX_FMT_SRGGB14P VIDEO_FOURCC('p', 'R', 'E', 'E')
+
+/**
+ * @brief Repeat a macro for every Bayer non-packed format, passed as first parameter
+ *
+ * A red, green, blue channel for every pixel, other than 8-bit per pixel.
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_BAYER_NON_PACKED(X, ...)					\
+	X(VIDEO_PIX_FMT_SBGGR8, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGBRG8, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGRBG8, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SRGGB8, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGBRG10, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGRBG10, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SRGGB10, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SBGGR12, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGBRG12, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGRBG12, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SRGGB12, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SBGGR14, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGBRG14, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGRBG14, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SRGGB14, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SBGGR16, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGBRG16, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SGRBG16, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_SRGGB16, __VA_ARGS__)
+
+/**
+ * @code{.unparsed}
+ *   0          1          2          3
+ * | Bbbbbbbb | Gggggggg | Bbbbbbbb | Gggggggg | ...
+ * | Gggggggg | Rrrrrrrr | Gggggggg | Rrrrrrrr | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_SBGGR8 VIDEO_FOURCC('B', 'A', '8', '1')
+
+/**
+ * @code{.unparsed}
+ *   0          1          2          3
+ * | Gggggggg | Bbbbbbbb | Gggggggg | Bbbbbbbb | ...
+ * | Rrrrrrrr | Gggggggg | Rrrrrrrr | Gggggggg | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_SGBRG8 VIDEO_FOURCC('G', 'B', 'R', 'G')
+
+/**
+ * @code{.unparsed}
+ *   0          1          2          3
+ * | Gggggggg | Rrrrrrrr | Gggggggg | Rrrrrrrr | ...
+ * | Bbbbbbbb | Gggggggg | Bbbbbbbb | Gggggggg | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_SGRBG8 VIDEO_FOURCC('G', 'R', 'B', 'G')
+
+/**
+ * @code{.unparsed}
+ *   0          1          2          3
+ * | Rrrrrrrr | Gggggggg | Rrrrrrrr | Gggggggg | ...
+ * | Gggggggg | Bbbbbbbb | Gggggggg | Bbbbbbbb | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_SRGGB8 VIDEO_FOURCC('R', 'G', 'G', 'B')
 
 /**
  * @code{.unparsed}
@@ -1323,6 +1572,32 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
  */
 
 /**
+ * @brief Repeat a macro for every grayscale format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_GRAYSCALE(X, ...)						\
+	VIDEO_FOREACH_GRAYSCALE_NON_PACKED(X, __VA_ARGS__)			\
+	VIDEO_FOREACH_GRAYSCALE_PADDED(X, __VA_ARGS__)				\
+	VIDEO_FOREACH_GRAYSCALE_MIPI_PACKED(X, __VA_ARGS__)
+
+/**
+ * @brief Repeat a macro for every grayscale non-packed format, passed as first parameter
+ *
+ * A red, green, blue channel for every pixel, other than 8-bit per pixel.
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_GRAYSCALE_NON_PACKED(X, ...)				\
+	X(VIDEO_PIX_FMT_GREY, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_Y10, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_Y12, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_Y14, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_Y16, __VA_ARGS__)
+
+/**
  * Same as Y8 (8-bit luma-only) following the standard FOURCC naming,
  * or L8 in some graphics libraries.
  *
@@ -1332,32 +1607,6 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
  * @endcode
  */
 #define VIDEO_PIX_FMT_GREY VIDEO_FOURCC('G', 'R', 'E', 'Y')
-
-/**
- * @code{.unparsed}
- *   0          1          2          3          3 2 1 0
- * | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | ...
- * @endcode
- */
-#define VIDEO_PIX_FMT_Y10P VIDEO_FOURCC('Y', '1', '0', 'P')
-
-/**
- * @code{.unparsed}
- *   0          1          1   0      2          3          3   2
- * | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | ...
- * | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | ...
- * @endcode
- */
-#define VIDEO_PIX_FMT_Y12P VIDEO_FOURCC('Y', '1', '2', 'P')
-
-/**
- * @code{.unparsed}
- *   0          1          2          3          1 0      2   1    3     2
- * | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy yyyyyyyy yyyyyyyy | ...
- * | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy yyyyyyyy yyyyyyyy | ...
- * @endcode
- */
-#define VIDEO_PIX_FMT_Y14P VIDEO_FOURCC('Y', '1', '4', 'P')
 
 /**
  * Little endian, with the 6 most significant bits set to Zero.
@@ -1400,6 +1649,62 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
 #define VIDEO_PIX_FMT_Y16 VIDEO_FOURCC('Y', '1', '6', ' ')
 
 /**
+ * @brief Repeat a macro for every grayscale padded format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_GRAYSCALE_PADDED(X, ...)					\
+	X(VIDEO_PIX_FMT_Y8P16, __VA_ARGS__)
+
+/**
+ * 8-bit luma-only split in two 4-bit blocks each zero-padded, little endian.
+ *
+ * @code{.unparsed}
+ *   0                   1                   2                   3
+ * | 0000yyyy 0000Yyyy | 0000yyyy 0000Yyyy | 0000yyyy 0000Yyyy | 0000yyyy 0000Yyyy | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_Y8P16 VIDEO_FOURCC('Y', '8', 'P', '2')
+
+/**
+ * @brief Repeat a macro for every grayscale MIPI-packed format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_GRAYSCALE_MIPI_PACKED(X, ...)				\
+	X(VIDEO_PIX_FMT_Y10P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_Y12P, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_Y14P, __VA_ARGS__)
+
+/**
+ * @code{.unparsed}
+ *   0          1          2          3          3 2 1 0
+ * | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_Y10P VIDEO_FOURCC('Y', '1', '0', 'P')
+
+/**
+ * @code{.unparsed}
+ *   0          1          1   0      2          3          3   2
+ * | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | ...
+ * | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_Y12P VIDEO_FOURCC('Y', '1', '2', 'P')
+
+/**
+ * @code{.unparsed}
+ *   0          1          2          3          1 0      2   1    3     2
+ * | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy yyyyyyyy yyyyyyyy | ...
+ * | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | Yyyyyyyy | yyyyyyyy yyyyyyyy yyyyyyyy | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_Y14P VIDEO_FOURCC('Y', '1', '4', 'P')
+
+/**
  * @}
  */
 
@@ -1408,6 +1713,30 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
  * Per-color (R, G, B) channels.
  * @{
  */
+
+/**
+ * @brief Repeat a macro for every RGB format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_RGB(X, ...)						\
+	VIDEO_FOREACH_RGB_PACKED(X, __VA_ARGS__)				\
+	VIDEO_FOREACH_RGB_NON_PACKED(X, __VA_ARGS__)				\
+	VIDEO_FOREACH_RGB_ALPHA(X, __VA_ARGS__)					\
+	VIDEO_FOREACH_RGB_PADDED(X, __VA_ARGS__)
+
+/**
+ * @brief Repeat a macro for every RGB packed format, passed as first parameter
+ *
+ * A red, green, blue channel for every pixel, other than 8-bit per pixel.
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_RGB_PACKED(X, ...)					\
+	X(VIDEO_PIX_FMT_RGB565X, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_RGB565, __VA_ARGS__)
 
 /**
  * 5 red bits [15:11], 6 green bits [10:5], 5 blue bits [4:0].
@@ -1432,6 +1761,18 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
 #define VIDEO_PIX_FMT_RGB565 VIDEO_FOURCC('R', 'G', 'B', 'P')
 
 /**
+ * @brief Repeat a macro for every RGB non-packed format, passed as first parameter
+ *
+ * A red, green, blue channel for every pixel, 8-bit per pixel.
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_RGB_NON_PACKED(X, ...)					\
+	X(VIDEO_PIX_FMT_BGR24, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_RGB24, __VA_ARGS__)
+
+/**
  * 24 bit RGB format with 8 bit per component
  *
  * @code{.unparsed}
@@ -1450,36 +1791,69 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
 #define VIDEO_PIX_FMT_RGB24 VIDEO_FOURCC('R', 'G', 'B', '3')
 
 /**
+ * @brief Repeat a macro for every RGB alpha format, passed as first parameter
+ *
+ * A red, green, blue, alpha channel for every pixel.
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_RGB_ALPHA(X, ...)						\
+	X(VIDEO_PIX_FMT_ARGB32, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_ABGR32, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_RGBA32, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_BGRA32, __VA_ARGS__)
+
+/**
+ * The first byte is alpha (A) for each pixel.
+ *
  * @code{.unparsed}
  * | Aaaaaaaa Rrrrrrrr Gggggggg Bbbbbbbb | ...
  * @endcode
  */
-
 #define VIDEO_PIX_FMT_ARGB32 VIDEO_FOURCC('B', 'A', '2', '4')
 
 /**
+ * The last byte is alpha (A) for each pixel.
+ * *
+ * @warning Linux calls this format ABGR32 due to a historical typo
+ *
  * @code{.unparsed}
  * | Bbbbbbbb Gggggggg Rrrrrrrr Aaaaaaaa | ...
  * @endcode
  */
-
-#define VIDEO_PIX_FMT_ABGR32 VIDEO_FOURCC('A', 'R', '2', '4')
+#define VIDEO_PIX_FMT_BGRA32 VIDEO_FOURCC('A', 'R', '2', '4')
 
 /**
+ * The last byte is alpha (A) for each pixel.
+ *
  * @code{.unparsed}
  * | Rrrrrrrr Gggggggg Bbbbbbbb Aaaaaaaa | ...
  * @endcode
  */
-
 #define VIDEO_PIX_FMT_RGBA32 VIDEO_FOURCC('A', 'B', '2', '4')
 
 /**
+ * The first byte is alpha (A) for each pixel.
+ *
+ * @warning Linux calls this format BGRA32 due to a historical typo
+ *
  * @code{.unparsed}
  * | Aaaaaaaa Bbbbbbbb Gggggggg Rrrrrrrr | ...
  * @endcode
  */
+#define VIDEO_PIX_FMT_ABGR32 VIDEO_FOURCC('R', 'A', '2', '4')
 
-#define VIDEO_PIX_FMT_BGRA32 VIDEO_FOURCC('R', 'A', '2', '4')
+/**
+ * @brief Repeat a macro for every RGB padded format, passed as first parameter
+ *
+ * A red, green, blue channel for every pixel.
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_RGB_PADDED(X, ...)					\
+	X(VIDEO_PIX_FMT_XRGB32, __VA_ARGS__)
 
 /**
  * The first byte is empty (X) for each pixel.
@@ -1491,6 +1865,37 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
 #define VIDEO_PIX_FMT_XRGB32 VIDEO_FOURCC('B', 'X', '2', '4')
 
 /**
+ * The first byte is empty (X) for each pixel.
+ *
+ * @warning Linux calls this format BGRX32 due to a historical typo
+ *
+ * @code{.unparsed}
+ * | Xxxxxxxx Bbbbbbbb Gggggggg Rrrrrrrr | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_XBGR32 VIDEO_FOURCC('R', 'X', '2', '4')
+
+/**
+ * The last byte is empty (X) for each pixel.
+ *
+ * @warning Linux calls this format XBGR32 due to a historical typo
+ *
+ * @code{.unparsed}
+ * | Bbbbbbbb Gggggggg Rrrrrrrr Xxxxxxxx | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_BGRX32 VIDEO_FOURCC('X', 'R', '2', '4')
+
+/**
+ * The last byte is empty (X) for each pixel.
+ *
+ * @code{.unparsed}
+ * | Rrrrrrrr Gggggggg Bbbbbbbb Xxxxxxxx | ...
+ * @endcode
+ */
+#define VIDEO_PIX_FMT_RGBX32 VIDEO_FOURCC('X', 'B', '2', '4')
+
+/**
  * @}
  */
 
@@ -1499,6 +1904,31 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
  * Luminance (Y) and chrominance (U, V) channels.
  * @{
  */
+
+/**
+ * @brief Repeat a macro for every YUV format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_YUV(X, ...)						\
+	VIDEO_FOREACH_YUV_FULL_PLANAR(X, __VA_ARGS__)				\
+	VIDEO_FOREACH_YUV_NON_PLANAR(X, __VA_ARGS__)				\
+	VIDEO_FOREACH_YUV_SEMI_PLANAR(X, __VA_ARGS__)
+
+/**
+ * @brief Repeat a macro for every YUV Non-Planar format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_YUV_NON_PLANAR(X, ...)					\
+	X(VIDEO_PIX_FMT_YUYV, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_YVYU, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_VYUY, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_UYVY, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_YUV24, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_XYUV32, __VA_ARGS__)
 
 /**
  * There is either a missing channel per pixel, U or V.
@@ -1541,8 +1971,28 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
 #define VIDEO_PIX_FMT_XYUV32 VIDEO_FOURCC('X', 'Y', 'U', 'V')
 
 /**
- * Planar formats
+ * 24 bit YUV format with 8 bit per component
+ *
+ * @code{.unparsed}
+ * | Yyyyyyyy Uuuuuuuu Vvvvvvvv | ...
+ * @endcode
  */
+#define VIDEO_PIX_FMT_YUV24 VIDEO_FOURCC('Y', 'U', 'V', '3')
+
+/**
+ * @brief Repeat a macro for every YUV Semi-Planar format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_YUV_SEMI_PLANAR(X, ...)					\
+	X(VIDEO_PIX_FMT_NV12, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_NV21, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_NV16, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_NV61, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_NV24, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_NV42, __VA_ARGS__)
+
 /**
  * Chroma (U/V) are subsampled horizontaly and vertically
  *
@@ -1697,6 +2147,16 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
 #define VIDEO_PIX_FMT_NV42 VIDEO_FOURCC('N', 'V', '4', '2')
 
 /**
+ * @brief Repeat a macro for every YUV Full-Planar format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_YUV_FULL_PLANAR(X, ...)					\
+	X(VIDEO_PIX_FMT_YUV420, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_YVU420, __VA_ARGS__)
+
+/**
  * Chroma (U/V) are subsampled horizontaly and vertically
  *
  * @code{.unparsed}
@@ -1764,13 +2224,118 @@ int64_t video_get_csi_link_freq(const struct device *dev, uint8_t bpp, uint8_t l
  */
 
 /**
+ * @brief Repeat a macro for every compressed format, passed as first parameter
+ *
+ * @param X macro to replicate
+ * @param ... extra parameters
+ */
+#define VIDEO_FOREACH_COMPRESSED(X, ...)					\
+	X(VIDEO_PIX_FMT_JPEG, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_H264, __VA_ARGS__)					\
+	X(VIDEO_PIX_FMT_H264_NO_SC, __VA_ARGS__)				\
+	X(VIDEO_PIX_FMT_PNG, __VA_ARGS__)
+
+/**
  * Both JPEG (single frame) and Motion-JPEG (MJPEG, multiple JPEG frames concatenated)
  */
 #define VIDEO_PIX_FMT_JPEG VIDEO_FOURCC('J', 'P', 'E', 'G')
 
 /**
+ * H264 with start code
+ */
+#define VIDEO_PIX_FMT_H264 VIDEO_FOURCC('H', '2', '6', '4')
+
+/**
+ * H264 without start code
+ */
+#define VIDEO_PIX_FMT_H264_NO_SC VIDEO_FOURCC('A', 'V', 'C', '1')
+
+/**
+ * PNG
+ */
+#define VIDEO_PIX_FMT_PNG VIDEO_FOURCC('P', 'N', 'G', ' ')
+
+/**
  * @}
  */
+
+/** @cond INTERNAL_HIDDEN */
+#define _VIDEO_FMT_OR_EQ(pixfmt_a, pixfmt_b) || ((pixfmt_a) == (pixfmt_b))
+/** @endcond */
+
+/**
+ * @brief Test if a fourcc is a grayscale format
+ *
+ * @param pixfmt FourCC of the pixel format to test
+ * @return Whether the format is known to match this category
+ */
+#define VIDEO_FMT_IS_GRAYSCALE(pixfmt)						\
+	(0 VIDEO_FOREACH_GRAYSCALE(_VIDEO_FMT_OR_EQ, pixfmt))
+
+/**
+ * @brief Test if a fourcc is a Bayer format
+ *
+ * @param pixfmt FourCC of the pixel format to test
+ * @return Whether the format is known to match this category
+ */
+#define VIDEO_FMT_IS_BAYER(pixfmt)						\
+	(0 VIDEO_FOREACH_BAYER(_VIDEO_FMT_OR_EQ, pixfmt))
+
+/**
+ * @brief Test if a fourcc is an RGB format (bayer excluded)
+ *
+ * @param pixfmt FourCC of the pixel format to test
+ * @return Whether the format is known to match this category
+ */
+#define VIDEO_FMT_IS_RGB(pixfmt)						\
+	(0 VIDEO_FOREACH_RGB(_VIDEO_FMT_OR_EQ, pixfmt))
+
+/**
+ * @brief Test if a fourcc is an YUV format
+ *
+ * @param pixfmt FourCC of the pixel format to test
+ * @return Whether the format is known to match this category
+ */
+#define VIDEO_FMT_IS_YUV(pixfmt)						\
+	(0 VIDEO_FOREACH_YUV(_VIDEO_FMT_OR_EQ, pixfmt))
+
+/**
+ * @brief Test if a fourcc is any of the MIPI-packed formats
+ *
+ * @param pixfmt FourCC of the pixel format to test
+ * @return Whether the format is known to match this category
+ */
+#define VIDEO_FMT_IS_MIPI_PACKED(pixfmt)					\
+	(0 VIDEO_FOREACH_BAYER_MIPI_PACKED(_VIDEO_FMT_OR_EQ, pixfmt)		\
+	   VIDEO_FOREACH_GRAYSCALE_MIPI_PACKED(_VIDEO_FMT_OR_EQ, pixfmt))
+
+/**
+ * @brief Test if a fourcc is any of the MIPI-packed formats
+ *
+ * @param pixfmt FourCC of the pixel format to test
+ * @return Whether the format is known to match this category
+ */
+#define VIDEO_FMT_IS_PADDED(pixfmt)						\
+	(0 VIDEO_FOREACH_BAYER_PADDED(_VIDEO_FMT_OR_EQ, pixfmt)			\
+	   VIDEO_FOREACH_GRAYSCALE_PADDED(_VIDEO_FMT_OR_EQ, pixfmt))
+
+/**
+ * @brief Test if a fourcc is any of the semi-planar formats
+ *
+ * @param pixfmt FourCC of the pixel format to test
+ * @return Whether the format is known to match this category
+ */
+#define VIDEO_FMT_IS_SEMI_PLANAR(pixfmt)					\
+	(0 VIDEO_FOREACH_YUV_SEMI_PLANAR(_VIDEO_FMT_OR_EQ, pixfmt))
+
+/**
+ * @brief Test if a fourcc is any of the full-planar formats
+ *
+ * @param pixfmt FourCC of the pixel format to test
+ * @return Whether the format is known to match this category
+ */
+#define VIDEO_FMT_IS_FULL_PLANAR(pixfmt)					\
+	(0 VIDEO_FOREACH_YUV_FULL_PLANAR(_VIDEO_FMT_OR_EQ, pixfmt))
 
 /**
  * @brief Get number of bits per pixel of a pixel format
@@ -1816,6 +2381,10 @@ static inline unsigned int video_bits_per_pixel(uint32_t pixfmt)
 	case VIDEO_PIX_FMT_YVYU:
 	case VIDEO_PIX_FMT_UYVY:
 	case VIDEO_PIX_FMT_VYUY:
+	case VIDEO_PIX_FMT_SBGGR8P16:
+	case VIDEO_PIX_FMT_SGBRG8P16:
+	case VIDEO_PIX_FMT_SGRBG8P16:
+	case VIDEO_PIX_FMT_SRGGB8P16:
 	case VIDEO_PIX_FMT_SBGGR10:
 	case VIDEO_PIX_FMT_SGBRG10:
 	case VIDEO_PIX_FMT_SGRBG10:
@@ -1832,6 +2401,7 @@ static inline unsigned int video_bits_per_pixel(uint32_t pixfmt)
 	case VIDEO_PIX_FMT_SGBRG16:
 	case VIDEO_PIX_FMT_SGRBG16:
 	case VIDEO_PIX_FMT_SRGGB16:
+	case VIDEO_PIX_FMT_Y8P16:
 	case VIDEO_PIX_FMT_Y10:
 	case VIDEO_PIX_FMT_Y12:
 	case VIDEO_PIX_FMT_Y14:
@@ -1843,13 +2413,17 @@ static inline unsigned int video_bits_per_pixel(uint32_t pixfmt)
 	case VIDEO_PIX_FMT_RGB24:
 	case VIDEO_PIX_FMT_NV24:
 	case VIDEO_PIX_FMT_NV42:
+	case VIDEO_PIX_FMT_YUV24:
 		return 24;
-	case VIDEO_PIX_FMT_XRGB32:
 	case VIDEO_PIX_FMT_XYUV32:
 	case VIDEO_PIX_FMT_ARGB32:
 	case VIDEO_PIX_FMT_ABGR32:
 	case VIDEO_PIX_FMT_RGBA32:
 	case VIDEO_PIX_FMT_BGRA32:
+	case VIDEO_PIX_FMT_XRGB32:
+	case VIDEO_PIX_FMT_XBGR32:
+	case VIDEO_PIX_FMT_RGBX32:
+	case VIDEO_PIX_FMT_BGRX32:
 		return 32;
 	default:
 		/* Variable number of bits per pixel or unknown format */

@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 NXP
+ * Copyright 2025-2026 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,11 +14,13 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/init.h>
 #include <soc.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/linker/sections.h>
 #include <zephyr/arch/cpu.h>
+#include <zephyr/logging/log.h>
 #include <cortex_m/exception.h>
 #include <fsl_power.h>
 #include <fsl_clock.h>
@@ -28,14 +30,33 @@
 #include <fsl_pint.h>
 #endif
 
+LOG_MODULE_REGISTER(soc, CONFIG_SOC_LOG_LEVEL);
+
 /* System clock frequency */
 extern uint32_t SystemCoreClock;
+extern void nxp_nbu_init(void);
+
+#if CONFIG_PM
+void nxp_mcxw2xx_power_early_init(void);
+#endif /* CONFIG_PM */
 
 #define CTIMER_CLOCK_SOURCE(node_id) \
 	TO_CTIMER_CLOCK_SOURCE(DT_CLOCKS_CELL(node_id, name), DT_PROP(node_id, clk_source))
 #define TO_CTIMER_CLOCK_SOURCE(inst, val) TO_CLOCK_ATTACH_ID(inst, val)
 #define TO_CLOCK_ATTACH_ID(inst, val) MUX_A(CM_CTIMERCLKSEL##inst, val)
 #define CTIMER_CLOCK_SETUP(node_id) CLOCK_AttachClk(CTIMER_CLOCK_SOURCE(node_id));
+/** 32KHz oscillator load in cap setting */
+#define OSC_CAP_IN_SETTING 5
+/** 32KHz oscillator load out cap setting */
+#define OSC_CAP_OUT_SETTING 5
+
+static void configure_32k_osc(void)
+{
+	/* Configure 32KHz xtal caps for use with RDM */
+	POWER_XTAL32K_ConfigureCaps(OSC_CAP_IN_SETTING, OSC_CAP_OUT_SETTING);
+	POWER_PeripheralPowerOn(kPOWERCFG_XTAL32K);
+	CLOCK_Select32kOscClkSrc(kCLOCK_Osc32kClockSrc_XTAL);
+}
 
 /**
  *
@@ -53,7 +74,7 @@ __weak void clock_init(void)
 	CLOCK_SetupFROClocking(kFreq_32MHz);
 
 	/* Set SystemCoreClock variable. */
-	SystemCoreClock = kFreq_32MHz;
+	SystemCoreClock = DT_PROP(DT_PATH(cpus, cpu_0), clock_frequency);
 
 	CLOCK_EnableClock(kCLOCK_Iocon);
 
@@ -75,8 +96,38 @@ __weak void clock_init(void)
 	CLOCK_AttachClk(kFRO_HF_DIV_to_FLEXCOMM2);
 #endif
 
+#if DT_NODE_HAS_COMPAT_STATUS(DT_NODELABEL(wwdt0), nxp_lpc_wwdt, okay)
+	CLOCK_Enable1MFRO(true);
+#endif
+
 	DT_FOREACH_STATUS_OKAY(nxp_lpc_ctimer, CTIMER_CLOCK_SETUP)
 	DT_FOREACH_STATUS_OKAY(nxp_ctimer_pwm, CTIMER_CLOCK_SETUP)
+
+	configure_32k_osc();
+
+#if DT_NODE_HAS_COMPAT_STATUS(DT_NODELABEL(os_timer), nxp_os_timer, okay)
+	/*
+	 * OS event timer generally uses FRO 1 MHz clock.
+	 * When power management is enabled, uses 32K clock for lower power.
+	 */
+	PMC->OSTIMERr &= ~PMC_OSTIMER_OSTIMERCLKSEL_MASK;
+#if CONFIG_PM
+	PMC->OSTIMERr |= OSTIMERCLKSEL_32768 << PMC_OSTIMER_OSTIMERCLKSEL_SHIFT;
+#else
+	PMC->OSTIMERr |= OSTIMERCLKSEL_FRO_1MHz << PMC_OSTIMER_OSTIMERCLKSEL_SHIFT;
+#endif
+#endif
+
+#if DT_NODE_HAS_COMPAT_STATUS(DT_NODELABEL(iap), nxp_iap_fmc55, okay)
+	/* kCLOCK_Sysctl must be enabled for FLASH_CacheClear,
+	 * FLASH_CacheSpeculationControl and FLASH_CheckECC to have an effect.
+	 */
+	CLOCK_EnableClock(kCLOCK_Sysctl);
+#endif
+
+	if (IS_ENABLED(CONFIG_NXP_GINT)) {
+		CLOCK_EnableClock(kCLOCK_Gint);
+	}
 }
 
 #ifdef CONFIG_SOC_RESET_HOOK
@@ -100,11 +151,19 @@ void soc_early_init_hook(void)
 {
 	z_arm_clear_faults();
 
+#if CONFIG_PM
+	nxp_mcxw2xx_power_early_init();
+#endif /* CONFIG_PM */
+
 	/* Initialize FRO/system clock to 96 MHz */
 	clock_init();
 
 #ifdef CONFIG_GPIO_MCUX_LPC
 	/* Turn on PINT device*/
 	PINT_Init(PINT);
+#endif
+
+#ifdef CONFIG_BT
+	nxp_nbu_init();
 #endif
 }

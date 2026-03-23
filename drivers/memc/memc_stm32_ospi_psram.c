@@ -286,11 +286,6 @@ static int memc_stm32_ospi_psram_init(const struct device *dev)
 		return ret;
 	}
 
-	if (!device_is_ready(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE))) {
-		LOG_ERR("clock control device not ready");
-		return -ENODEV;
-	}
-
 	if (clock_control_on(DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE),
 			     (clock_control_subsys_t)&dev_cfg->pclken) != 0) {
 		LOG_ERR("Could not enable OSPI clock");
@@ -372,8 +367,10 @@ static int memc_stm32_ospi_psram_init(const struct device *dev)
 	ll_dlyb_cfg.PhaseSel /= 4;
 	ll_dlyb_cfg_test = ll_dlyb_cfg;
 
-	HAL_OSPI_DLYB_SetConfig(hospi, &ll_dlyb_cfg);
-	HAL_OSPI_DLYB_GetConfig(hospi, &ll_dlyb_cfg);
+	if ((HAL_OSPI_DLYB_SetConfig(hospi, &ll_dlyb_cfg) != HAL_OK) ||
+	    (HAL_OSPI_DLYB_GetConfig(hospi, &ll_dlyb_cfg) != HAL_OK)) {
+		return -EIO;
+	}
 
 	if ((ll_dlyb_cfg.PhaseSel != ll_dlyb_cfg_test.PhaseSel) ||
 	    (ll_dlyb_cfg.Units != ll_dlyb_cfg_test.Units)) {
@@ -407,18 +404,15 @@ static int memc_stm32_ospi_psram_init(const struct device *dev)
 PINCTRL_DT_DEFINE(STM32_OSPI_NODE);
 
 static struct memc_stm32_ospi_psram_config memc_stm32_ospi_config = {
-	.pclken = {.bus = DT_CLOCKS_CELL_BY_NAME(STM32_OSPI_NODE, ospix, bus),
-		   .enr = DT_CLOCKS_CELL_BY_NAME(STM32_OSPI_NODE, ospix, bits)},
+	.pclken = STM32_CLOCK_INFO_BY_NAME(STM32_OSPI_NODE, ospix),
 	.pcfg = PINCTRL_DT_DEV_CONFIG_GET(STM32_OSPI_NODE),
 	.memory_size = DT_INST_PROP(0, size) / 8, /* In Bytes */
 	.max_frequency = DT_INST_PROP(0, max_frequency),
 #if DT_CLOCKS_HAS_NAME(STM32_OSPI_NODE, ospi_ker)
-	.pclken_ker = {.bus = DT_CLOCKS_CELL_BY_NAME(STM32_OSPI_NODE, ospi_ker, bus),
-		       .enr = DT_CLOCKS_CELL_BY_NAME(STM32_OSPI_NODE, ospi_ker, bits)},
+	.pclken_ker = STM32_CLOCK_INFO_BY_NAME(STM32_OSPI_NODE, ospi_ker),
 #endif
 #if DT_CLOCKS_HAS_NAME(STM32_OSPI_NODE, ospi_mgr)
-	.pclken_mgr = {.bus = DT_CLOCKS_CELL_BY_NAME(STM32_OSPI_NODE, ospi_mgr, bus),
-		       .enr = DT_CLOCKS_CELL_BY_NAME(STM32_OSPI_NODE, ospi_mgr, bits)},
+	.pclken_mgr = STM32_CLOCK_INFO_BY_NAME(STM32_OSPI_NODE, ospi_mgr),
 #endif
 };
 
@@ -435,10 +429,10 @@ static struct memc_stm32_ospi_psram_data memc_stm32_ospi_data = {
 			.WrapSize = HAL_OSPI_WRAP_NOT_SUPPORTED,
 			.SampleShifting = HAL_OSPI_SAMPLE_SHIFTING_NONE,
 			.DelayHoldQuarterCycle = HAL_OSPI_DHQC_ENABLE,
-			.ChipSelectBoundary = 10,
+			.ChipSelectBoundary = DT_INST_PROP(0, st_csbound),
 			.DelayBlockBypass = HAL_OSPI_DELAY_BLOCK_USED,
 			.MaxTran = 0,
-			.Refresh = 320,
+			.Refresh = DT_INST_PROP(0, st_refresh),
 		},
 	},
 	.ospim_cfg = {

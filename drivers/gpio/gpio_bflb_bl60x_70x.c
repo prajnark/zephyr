@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2024 MASSDRIVER EI (massdriver.space)
+ * Copyright (c) 2024-2026 MASSDRIVER EI (massdriver.space)
+ * Copyright (c) 2026 William Markezana
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -21,6 +22,11 @@
 #include <bouffalolab/bl70x/bflb_soc.h>
 #include <bouffalolab/bl70x/glb_reg.h>
 #include <bouffalolab/bl70x/hbn_reg.h>
+#elif defined(CONFIG_SOC_SERIES_BL70XL)
+#include <zephyr/dt-bindings/pinctrl/bl70xl-pinctrl.h>
+#include <bouffalolab/bl70xl/bflb_soc.h>
+#include <bouffalolab/bl70xl/glb_reg.h>
+#include <bouffalolab/bl70xl/hbn_reg.h>
 #else
 #error Unsupported platform
 #endif
@@ -199,20 +205,18 @@ static int gpio_bflb_config(const struct device *dev, gpio_pin_t pin,
 			   gpio_flags_t flags)
 {
 	const struct gpio_bflb_config * const cfg = dev->config;
-	uint8_t is_odd = 0;
+	uint8_t is_odd;
 	uint32_t cfg_address;
 	uint32_t tmp;
 	uint32_t outputcfg;
 	uint32_t pincfg;
-
 
 	/* Disable output anyway */
 	tmp = sys_read32(cfg->base_reg + GLB_GPIO_CFGCTL34_OFFSET);
 	tmp &= ~BIT(pin);
 	sys_write32(tmp, cfg->base_reg + GLB_GPIO_CFGCTL34_OFFSET);
 
-
-#ifdef CONFIG_SOC_SERIES_BL70X
+#if defined(CONFIG_SOC_SERIES_BL70X) || defined(CONFIG_SOC_SERIES_BL70XL)
 	is_odd = pin & 1U;
 	cfg_address = cfg->base_reg + GLB_GPIO_CFG_OFFSET(pin);
 	if (pin >= GPIO_BFLB_BL70X_PSRAM_START && pin <= GPIO_BFLB_BL70X_PSRAM_END) {
@@ -247,18 +251,17 @@ static int gpio_bflb_config(const struct device *dev, gpio_pin_t pin,
 		outputcfg |= BIT(pin);
 		if (flags & GPIO_OUTPUT_INIT_HIGH) {
 			tmp = sys_read32(cfg->base_reg + GLB_GPIO_CFGCTL32_OFFSET);
-			tmp = tmp | pin;
+			tmp |= BIT(pin);
 			sys_write32(tmp, cfg->base_reg + GLB_GPIO_CFGCTL32_OFFSET);
 		}
 		if (flags & GPIO_OUTPUT_INIT_LOW) {
 			tmp = sys_read32(cfg->base_reg + GLB_GPIO_CFGCTL32_OFFSET);
-			tmp = tmp & ~pin;
+			tmp &= ~BIT(pin);
 			sys_write32(tmp, cfg->base_reg + GLB_GPIO_CFGCTL32_OFFSET);
 		}
 	} else {
 		outputcfg &= ~BIT(pin);
 	}
-
 
 	sys_write32(outputcfg, cfg->base_reg + GLB_GPIO_CFGCTL34_OFFSET);
 
@@ -274,7 +277,7 @@ static int gpio_bflb_config(const struct device *dev, gpio_pin_t pin,
 	}
 
 	/* GPIO mode */
-#ifdef CONFIG_SOC_SERIES_BL70X
+#if defined(CONFIG_SOC_SERIES_BL70X) || defined(CONFIG_SOC_SERIES_BL70XL)
 	/* but function goes in the right place */
 	if (pin >= GPIO_BFLB_BL70X_PSRAM_START && pin <= GPIO_BFLB_BL70X_PSRAM_END) {
 		tmp = sys_read32(cfg->base_reg + GLB_GPIO_CFG_OFFSET(pin));
@@ -309,6 +312,12 @@ int gpio_bflb_init(const struct device *dev)
 {
 	const struct gpio_bflb_config * const cfg = dev->config;
 
+#if defined(CONFIG_SOC_SERIES_BL70X) && !DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(psram))
+	/* Pins 23-28 are output-only (no high-Z). Route them through the PSRAM IO pads. */
+	sys_write32(GLB_CFG_GPIO_USE_PSRAM_IO_MSK,
+		    GLB_BASE + GLB_GPIO_USE_PSRAM__IO_OFFSET);
+#endif
+
 	cfg->irq_config_func(dev);
 
 	return 0;
@@ -336,7 +345,7 @@ static int gpio_bflb_manage_callback(const struct device *port,
 	return gpio_manage_callback(&(data->callbacks), callback, set);
 }
 
-static const struct gpio_driver_api gpio_bflb_api = {
+static DEVICE_API(gpio, gpio_bflb_api) = {
 	.pin_configure = gpio_bflb_config,
 	.port_get_raw = gpio_bflb_port_get_raw,
 	.port_set_masked_raw = gpio_bflb_port_set_masked_raw,
@@ -352,9 +361,7 @@ static const struct gpio_driver_api gpio_bflb_api = {
 	static void port_##n##_bflb_irq_enable_func(const struct device *dev);	\
 										\
 	static const struct gpio_bflb_config port_##n##_bflb_config = {		\
-		.common = {							\
-			.port_pin_mask = GPIO_PORT_PIN_MASK_FROM_DT_INST(n),	\
-		},								\
+		.common = GPIO_COMMON_CONFIG_FROM_DT_INST(n),			\
 		.base_reg = DT_INST_REG_ADDR(n),				\
 		.irq_config_func = port_##n##_bflb_irq_config_func,		\
 		.irq_enable_func = port_##n##_bflb_irq_enable_func,		\

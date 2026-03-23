@@ -95,6 +95,10 @@
 	status = "okay";
 };
 
+&netc_ptp_clock0 {
+	status = "okay";
+};
+
 &switch {
 	status = "okay";
 };
@@ -228,9 +232,9 @@
 				reg = <0x00720000 DT_SIZE_M(7)>;
 			};
 
-			storage_partition: partition@E20000 {
+			storage_partition: partition@e20000 {
 				label = "storage";
-				reg = <0x00E20000 (DT_SIZE_M(2) - DT_SIZE_K(128))>;
+				reg = <0x00e20000 (DT_SIZE_M(2) - DT_SIZE_K(128))>;
 			};
 		};
 	};
@@ -321,5 +325,4 @@ p3t1755dp_ard_i2c_interface: &lpi2c2 {};
 		clocks = <&ccm IMX_CCM_SAI1_CLK 0x2004 4>;
 		clock-names = "mclk";
 	};
-
 };

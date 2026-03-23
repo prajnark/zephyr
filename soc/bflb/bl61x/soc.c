@@ -13,6 +13,7 @@
 #include <zephyr/device.h>
 #include <zephyr/init.h>
 #include <zephyr/irq.h>
+#include <zephyr/cache.h>
 
 #include <bflb_soc.h>
 #include <glb_reg.h>
@@ -82,99 +83,6 @@ void system_sysmap_init(void)
 	/* 8. others: Strong-Order, Non-Cacheable, Non-Bufferable */
 	sys_write32(0xFFFFF000U >> SYSMAP_BASE_SHIFT, (sysmap_base + SYSMAP_ADDR_OFFSET));
 	sys_write32(SYSMAP_ATTR_STRONG_ORDER, (sysmap_base + SYSMAP_FLAGS_OFFSET));
-}
-
-/* brown out detection */
-void system_BOD_init(void)
-{
-	uint32_t tmp;
-
-	/* disable BOD interrupt */
-	tmp = sys_read32(HBN_BASE + HBN_IRQ_MODE_OFFSET);
-	tmp &= ~HBN_IRQ_BOR_EN_MSK;
-	sys_write32(tmp, HBN_BASE + HBN_IRQ_MODE_OFFSET);
-
-	tmp = sys_read32(HBN_BASE + HBN_BOR_CFG_OFFSET);
-	/* when brownout threshold, restart*/
-	tmp |= HBN_BOD_SEL_MSK;
-	/* set BOD threshold:
-	 * 0:2.05v,1:2.10v,2:2.15v....7:2.4v
-	 */
-	tmp &= ~HBN_BOD_VTH_MSK;
-	tmp |= (7 << HBN_BOD_VTH_POS);
-	/* enable BOD */
-	tmp |= HBN_PU_BOD_MSK;
-	sys_write32(tmp, HBN_BASE + HBN_BOR_CFG_OFFSET);
-}
-
-static void clean_dcache(void)
-{
-	__asm__ volatile (
-		"fence\n"
-		/* th.dcache.call*/
-		".insn 0x10000B\n"
-		"fence\n"
-	);
-}
-
-static void clean_icache(void)
-{
-	__asm__ volatile (
-		"fence\n"
-		"fence.i\n"
-		/* th.icache.iall */
-		".insn 0x100000B\n"
-		"fence\n"
-		"fence.i\n"
-	);
-}
-
-static void enable_icache(void)
-{
-	uint32_t tmp;
-
-	__asm__ volatile (
-		"fence\n"
-		"fence.i\n"
-		/* th.icache.iall */
-		".insn 0x100000B\n"
-	);
-	__asm__ volatile(
-		"csrr %0, 0x7C1"
-		: "=r"(tmp));
-	tmp |= (1 << 0);
-	__asm__ volatile(
-		"csrw 0x7C1, %0"
-		:
-		: "r"(tmp));
-	__asm__ volatile (
-		"fence\n"
-		"fence.i\n"
-	);
-}
-
-static void enable_dcache(void)
-{
-	uint32_t tmp;
-
-	__asm__ volatile (
-		"fence\n"
-		"fence.i\n"
-		/* th.dcache.iall */
-		".insn 0x20000B\n"
-	);
-	__asm__ volatile(
-		"csrr %0, 0x7C1"
-		: "=r"(tmp));
-	tmp |= (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4);
-	__asm__ volatile(
-		"csrw 0x7C1, %0"
-		:
-		: "r"(tmp));
-	__asm__ volatile (
-		"fence\n"
-		"fence.i\n"
-	);
 }
 
 static void enable_branchpred(bool yes)
@@ -249,6 +157,17 @@ static void disable_interrupt_autostacking(void)
 		: "r"(tmp));
 }
 
+void arch_cache_init(void)
+{
+	enable_thead_isa_ext();
+	set_thead_enforce_aligned(false);
+	sys_cache_data_enable();
+	enable_branchpred(true);
+	sys_cache_instr_enable();
+	disable_interrupt_autostacking();
+	sys_cache_data_flush_and_invd_all();
+	sys_cache_instr_invd_all();
+}
 
 void soc_early_init_hook(void)
 {
@@ -263,18 +182,6 @@ void soc_early_init_hook(void)
 	sys_write32((1 << 5), PDS_BASE + PDS_USB_CTL_OFFSET);
 	sys_write32(0, PDS_BASE + PDS_USB_PHY_CTRL_OFFSET);
 
-	enable_thead_isa_ext();
-	set_thead_enforce_aligned(false);
-	enable_dcache();
-	/* branch prediction can cause major slowdowns (250ms -> 2 seconds)
-	 * in some applications
-	 */
-	enable_branchpred(true);
-	enable_icache();
-	disable_interrupt_autostacking();
-	clean_dcache();
-	clean_icache();
-
 	/* reset uart signals */
 	sys_write32(0xffffffffU, GLB_BASE + GLB_UART_CFG1_OFFSET);
 	sys_write32(0x0000ffffU, GLB_BASE + GLB_UART_CFG2_OFFSET);
@@ -284,9 +191,15 @@ void soc_early_init_hook(void)
 	tmp &= ~HBN_REG_EN_AON_CTRL_GPIO_MSK;
 	sys_write32(tmp, HBN_BASE + HBN_PAD_CTRL_0_OFFSET);
 
-	/* TODO: 'em' config for ble goes here */
-
-	system_BOD_init();
-
 	irq_unlock(key);
+}
+
+void soc_prep_hook(void)
+{
+	uint32_t tmp;
+
+	/* Disable default EM zone before data relocation happens */
+	tmp = sys_read32(GLB_BASE + GLB_SRAM_CFG3_OFFSET);
+	tmp &= GLB_EM_SEL_UMSK;
+	sys_write32(tmp, GLB_BASE + GLB_SRAM_CFG3_OFFSET);
 }

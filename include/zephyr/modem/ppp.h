@@ -8,6 +8,7 @@
 #include <zephyr/types.h>
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_pkt.h>
+#include <zephyr/net/ppp.h>
 #include <zephyr/sys/ring_buffer.h>
 #include <zephyr/sys/atomic.h>
 
@@ -41,8 +42,8 @@ enum modem_ppp_receive_state {
 	/* Searching for start of frame and header */
 	MODEM_PPP_RECEIVE_STATE_HDR_SOF = 0,
 	MODEM_PPP_RECEIVE_STATE_HDR_FF,
-	MODEM_PPP_RECEIVE_STATE_HDR_7D,
-	MODEM_PPP_RECEIVE_STATE_HDR_23,
+	MODEM_PPP_RECEIVE_STATE_HDR_CTRL_UNESCAPE,
+	MODEM_PPP_RECEIVE_STATE_HDR_CTRL,
 	/* Writing bytes to network packet */
 	MODEM_PPP_RECEIVE_STATE_WRITING,
 	/* Unescaping next byte before writing to network packet */
@@ -50,27 +51,10 @@ enum modem_ppp_receive_state {
 };
 
 enum modem_ppp_transmit_state {
-	/* Idle */
 	MODEM_PPP_TRANSMIT_STATE_IDLE = 0,
-	/* Writing header */
 	MODEM_PPP_TRANSMIT_STATE_SOF,
-	MODEM_PPP_TRANSMIT_STATE_HDR_FF,
-	MODEM_PPP_TRANSMIT_STATE_HDR_7D,
-	MODEM_PPP_TRANSMIT_STATE_HDR_23,
-	/* Writing protocol */
-	MODEM_PPP_TRANSMIT_STATE_PROTOCOL_HIGH,
-	MODEM_PPP_TRANSMIT_STATE_ESCAPING_PROTOCOL_HIGH,
-	MODEM_PPP_TRANSMIT_STATE_PROTOCOL_LOW,
-	MODEM_PPP_TRANSMIT_STATE_ESCAPING_PROTOCOL_LOW,
-	/* Writing data */
+	MODEM_PPP_TRANSMIT_STATE_PROTOCOL,
 	MODEM_PPP_TRANSMIT_STATE_DATA,
-	MODEM_PPP_TRANSMIT_STATE_ESCAPING_DATA,
-	/* Writing FCS */
-	MODEM_PPP_TRANSMIT_STATE_FCS_LOW,
-	MODEM_PPP_TRANSMIT_STATE_ESCAPING_FCS_LOW,
-	MODEM_PPP_TRANSMIT_STATE_FCS_HIGH,
-	MODEM_PPP_TRANSMIT_STATE_ESCAPING_FCS_HIGH,
-	/* Writing end of frame */
 	MODEM_PPP_TRANSMIT_STATE_EOF,
 };
 
@@ -100,8 +84,6 @@ struct modem_ppp {
 	/* Packet being sent */
 	enum modem_ppp_transmit_state transmit_state;
 	struct net_pkt *tx_pkt;
-	uint8_t tx_pkt_escaped;
-	uint16_t tx_pkt_protocol;
 	uint16_t tx_pkt_fcs;
 
 	/* Ring buffer used for transmitting partial PPP frame */

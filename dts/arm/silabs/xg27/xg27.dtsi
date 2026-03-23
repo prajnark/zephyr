@@ -15,6 +15,8 @@
 
 / {
 	chosen {
+		silabs,sleeptimer = &rtcc0;
+		zephyr,crc = &gpcrc;
 		zephyr,entropy = &trng;
 		zephyr,flash-controller = &msc;
 	};
@@ -181,7 +183,7 @@
 	};
 
 	hwinfo: hwinfo {
-		compatible = "silabs,gecko-hwinfo";
+		compatible = "silabs,series2-hwinfo";
 		status = "disabled";
 	};
 
@@ -213,7 +215,6 @@
 			reg = <0x50010000 0x4000>;
 			#clock-cells = <0>;
 			clock-frequency = <DT_FREQ_M(19)>;
-			clocks = <&cmu CLOCK_HFRCO0 CLOCK_BRANCH_INVALID>;
 			interrupt-names = "hfrco0";
 			interrupts = <51 2>;
 		};
@@ -361,6 +362,11 @@
 			interrupts = <10 2>;
 			status = "disabled";
 
+			counter {
+				compatible = "silabs,timer-counter";
+				status = "disabled";
+			};
+
 			pwm {
 				compatible = "silabs,timer-pwm";
 				#pwm-cells = <3>;
@@ -377,6 +383,11 @@
 			interrupt-names = "timer1";
 			interrupts = <11 2>;
 			status = "disabled";
+
+			counter {
+				compatible = "silabs,timer-counter";
+				status = "disabled";
+			};
 
 			pwm {
 				compatible = "silabs,timer-pwm";
@@ -395,6 +406,11 @@
 			interrupts = <12 2>;
 			status = "disabled";
 
+			counter {
+				compatible = "silabs,timer-counter";
+				status = "disabled";
+			};
+
 			pwm {
 				compatible = "silabs,timer-pwm";
 				#pwm-cells = <3>;
@@ -412,6 +428,11 @@
 			interrupts = <13 2>;
 			status = "disabled";
 
+			counter {
+				compatible = "silabs,timer-counter";
+				status = "disabled";
+			};
+
 			pwm {
 				compatible = "silabs,timer-pwm";
 				#pwm-cells = <3>;
@@ -428,6 +449,11 @@
 			interrupt-names = "timer4";
 			interrupts = <14 2>;
 			status = "disabled";
+
+			counter {
+				compatible = "silabs,timer-counter";
+				status = "disabled";
+			};
 
 			pwm {
 				compatible = "silabs,timer-pwm";
@@ -455,7 +481,7 @@
 		};
 
 		burtc0: burtc@50064000 {
-			compatible = "silabs,gecko-burtc";
+			compatible = "silabs,burtc-counter";
 			reg = <0x50064000 0x4000>;
 			clocks = <&cmu CLOCK_BURTC CLOCK_BRANCH_EM4GRPACLK>;
 			interrupt-names = "burtc";
@@ -475,6 +501,20 @@
 			status = "disabled";
 		};
 
+		buram: retained-memory@50080000 {
+			compatible = "silabs,buram";
+			reg = <0x50080000 0x80>;
+			clocks = <&cmu CLOCK_BURAM CLOCK_BRANCH_INVALID>;
+			status = "disabled";
+		};
+
+		gpcrc: gpcrc@50088000 {
+			compatible = "silabs,gpcrc";
+			reg = <0x50088000 0x4000>;
+			clocks = <&cmu CLOCK_GPCRC0 CLOCK_BRANCH_PCLK>;
+			status = "okay";
+		};
+
 		dcdc: dcdc@50094000 {
 			compatible = "silabs,series2-dcdc";
 			reg = <0x50094000 0x4000>;
@@ -484,8 +524,8 @@
 			status = "disabled";
 		};
 
-		rtcc0: stimer0: rtcc@58000000 {
-			compatible = "silabs,gecko-stimer";
+		rtcc0: rtcc@58000000 {
+			compatible = "silabs,rtcc";
 			reg = <0x58000000 0x4000>;
 			clock-frequency = <32768>;
 			clocks = <&cmu CLOCK_RTCC CLOCK_BRANCH_RTCCCLK>;
@@ -511,7 +551,7 @@
 		};
 
 		adc0: adc@5a004000 {
-			compatible = "silabs,gecko-iadc";
+			compatible = "silabs,iadc";
 			reg = <0x5a004000 0x4000>;
 			#io-channel-cells = <1>;
 			clocks = <&cmu CLOCK_IADC0 CLOCK_BRANCH_IADCCLK>;

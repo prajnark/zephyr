@@ -1,7 +1,7 @@
 /*
  * Xilinx AXI 1G / 2.5G Ethernet Subsystem
  *
- * Copyright(c) 2024, CISPA Helmholtz Center for Information Security
+ * Copyright (c) 2024, CISPA Helmholtz Center for Information Security
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -150,7 +150,8 @@ static void xilinx_axienet_rx_callback(const struct device *dma, void *user_data
 	data->rx_completed_buffer_index = next_descriptor;
 
 	packet_size = dma_xilinx_axi_dma_last_received_frame_length(dma);
-	pkt = net_pkt_rx_alloc_with_buffer(data->interface, packet_size, AF_UNSPEC, 0, K_NO_WAIT);
+	pkt = net_pkt_rx_alloc_with_buffer(data->interface, packet_size,
+					   NET_AF_UNSPEC, 0, K_NO_WAIT);
 
 	if (!pkt) {
 		LOG_ERR("Could not allocate a packet!");
@@ -508,7 +509,6 @@ static int xilinx_axienet_probe(const struct device *dev)
 	const struct xilinx_axienet_config *config = dev->config;
 	struct xilinx_axienet_data *data = dev->data;
 	uint32_t status;
-	int err;
 
 	status = xilinx_axienet_read_register(
 		config, XILINX_AXIENET_RECEIVER_CONFIGURATION_WORD_1_REG_OFFSET);

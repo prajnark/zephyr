@@ -1,20 +1,19 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Copyright (c) 2025 Ambiq Micro Inc. <www.ambiq.com>
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <arm/armv7-m.dtsi>
 #include <mem.h>
 #include <freq.h>
+#include <zephyr/dt-bindings/adc/adc.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/pwm/pwm.h>
 
 / {
 	clocks {
-		uartclk: apb-pclk {
-			compatible = "fixed-clock";
-			clock-frequency = <DT_FREQ_M(24)>;
-			#clock-cells = <0>;
-		};
-
 		xo32m: xo32m {
 			compatible = "ambiq,clkctrl";
 			clock-frequency = <DT_FREQ_M(32)>;
@@ -35,6 +34,7 @@
 		cpu0: cpu@0 {
 			compatible = "arm,cortex-m4f";
 			reg = <0>;
+			cpu-power-states = <&idle &suspend_to_ram>;
 			#address-cells = <1>;
 			#size-cells = <1>;
 
@@ -42,6 +42,34 @@
 				compatible = "arm,armv7m-itm";
 				reg = <0xe0000000 0x1000>;
 				swo-ref-frequency = <DT_FREQ_M(48)>;
+			};
+		};
+
+		power-states {
+			idle: idle {
+				compatible = "zephyr,power-state";
+				power-state-name = "suspend-to-idle";
+				/*
+				 * As Apollo4 datasheet, run_to_sleep and sleep_to_run
+				 * transition time are both lower than 1us, but
+				 * considering the software overhead we set a
+				 * bigger value.
+				 */
+				min-residency-us = <100>;
+				exit-latency-us = <5>;
+			};
+
+			suspend_to_ram: suspend_to_ram {
+				compatible = "zephyr,power-state";
+				power-state-name = "suspend-to-ram";
+				/*
+				 * As Apollo4 datasheet, run_to_deepsleep transition
+				 * time is lower than 1us and deepsleep_to_run
+				 * transition time is about 25us, but considering
+				 * the software overhead, we set a bigger value.
+				 */
+				min-residency-us = <2000>;
+				exit-latency-us = <125>;
 			};
 		};
 	};
@@ -56,7 +84,7 @@
 	/* SRAM */
 	sram0: memory@10010000 {
 		compatible = "mmio-sram";
-		reg = <0x10010000 0x2B0000>;
+		reg = <0x10010000 0x2b0000>;
 	};
 
 	soc {
@@ -175,7 +203,7 @@
 
 		timer5: timer@400080a0 {
 			compatible = "ambiq,timer";
-			reg = <0x400080A0 0x20>;
+			reg = <0x400080a0 0x20>;
 			interrupts = <72 0>;
 			clk-source = "CLK_SELECT_HFRC_DIV64";
 
@@ -193,7 +221,7 @@
 
 		timer6: timer@400080c0 {
 			compatible = "ambiq,timer";
-			reg = <0x400080C0 0x20>;
+			reg = <0x400080c0 0x20>;
 			interrupts = <73 0>;
 			clk-source = "CLK_SELECT_HFRC_DIV64";
 
@@ -211,7 +239,7 @@
 
 		timer7: timer@400080e0 {
 			compatible = "ambiq,timer";
-			reg = <0x400080E0 0x20>;
+			reg = <0x400080e0 0x20>;
 			interrupts = <74 0>;
 			clk-source = "CLK_SELECT_HFRC_DIV64";
 
@@ -319,7 +347,7 @@
 
 		timer13: timer@400081a0 {
 			compatible = "ambiq,timer";
-			reg = <0x400081A0 0x20>;
+			reg = <0x400081a0 0x20>;
 			interrupts = <80 0>;
 			clk-source = "CLK_SELECT_HFRC_DIV64";
 
@@ -337,7 +365,7 @@
 
 		timer14: timer@400081c0 {
 			compatible = "ambiq,timer";
-			reg = <0x400081C0 0x20>;
+			reg = <0x400081c0 0x20>;
 			interrupts = <81 0>;
 			clk-source = "CLK_SELECT_HFRC_DIV64";
 
@@ -355,7 +383,7 @@
 
 		timer15: timer@400081e0 {
 			compatible = "ambiq,timer";
-			reg = <0x400081E0 0x20>;
+			reg = <0x400081e0 0x20>;
 			interrupts = <82 0>;
 			clk-source = "CLK_SELECT_HFRC_DIV64";
 
@@ -372,39 +400,35 @@
 		};
 
 		uart0: uart@4001c000 {
-			compatible = "ambiq,pl011-uart", "arm,pl011";
+			compatible = "ambiq,uart";
 			reg = <0x4001c000 0x1000>;
 			interrupts = <15 0>;
-			interrupt-names = "UART0";
+			clk-src = <0>;
 			status = "disabled";
-			clocks = <&uartclk>;
 		};
 
 		uart1: uart@4001d000 {
-			compatible = "ambiq,pl011-uart", "arm,pl011";
+			compatible = "ambiq,uart";
 			reg = <0x4001d000 0x1000>;
 			interrupts = <16 0>;
-			interrupt-names = "UART1";
+			clk-src = <0>;
 			status = "disabled";
-			clocks = <&uartclk>;
 		};
 
 		uart2: uart@4001e000 {
-			compatible = "ambiq,pl011-uart", "arm,pl011";
+			compatible = "ambiq,uart";
 			reg = <0x4001e000 0x1000>;
 			interrupts = <17 0>;
-			interrupt-names = "UART2";
+			clk-src = <0>;
 			status = "disabled";
-			clocks = <&uartclk>;
 		};
 
 		uart3: uart@4001f000 {
-			compatible = "ambiq,pl011-uart", "arm,pl011";
+			compatible = "ambiq,uart";
 			reg = <0x4001f000 0x1000>;
 			interrupts = <18 0>;
-			interrupt-names = "UART3";
+			clk-src = <0>;
 			status = "disabled";
-			clocks = <&uartclk>;
 		};
 
 		iom0: iom@40050000 {
@@ -587,6 +611,17 @@
 			};
 		};
 
+		adc0: adc@40038000 {
+			compatible = "ambiq,adc";
+			reg = <0x40038000 0x400>;
+			interrupts = <19 0>;
+			interrupt-names = "ADC";
+			channel-count = <10>;
+			internal-vref-mv = <1190>;
+			status = "disabled";
+			#io-channel-cells = <1>;
+		};
+
 		mspi0: spi@40060000 {
 			compatible = "ambiq,mspi";
 			reg = <0x40060000 0x400>;
@@ -616,7 +651,7 @@
 
 		usb: usb@400b0000 {
 			compatible = "ambiq,usb";
-			reg = <0x400B0000 0x4100>;
+			reg = <0x400b0000 0x4100>;
 			interrupts = <27 0>;
 			num-bidir-endpoints = <6>;
 			maximum-speed = "full-speed";

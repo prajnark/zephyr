@@ -112,16 +112,24 @@ void entry_cpu_exception_extend(void *p1, void *p2, void *p3)
 	__asm__ volatile ("udf #0");
 #elif defined(CONFIG_RX)
 	__asm__ volatile ("brk");
+#elif defined(CONFIG_SOC_FAMILY_MAX32_RV32)
+	/* The MAX32 RV32 core does not trap on writes to
+	 * non-existent CSRs, so use a different illegal instruction
+	 * for this test.
+	 */
+	__asm__ volatile (".word 0");
 #elif defined(CONFIG_RISCV)
 	/* In riscv architecture, use an undefined
 	 * instruction to trigger illegal instruction on RISCV.
 	 */
 	__asm__ volatile ("unimp");
+#elif defined(CONFIG_ARC)
 	/* In arc architecture, SWI instruction is used
 	 * to trigger soft interrupt.
 	 */
-#elif defined(CONFIG_ARC)
 	__asm__ volatile ("swi");
+#elif defined(CONFIG_OPENRISC)
+	__asm__ volatile ("l.trap 0");
 #else
 	/* used to create a divide by zero error on X86 and MIPS */
 	volatile int error;
@@ -415,17 +423,11 @@ ZTEST(fatal_exception, test_fatal)
 
 #ifdef CONFIG_USERSPACE
 
-	/* on arc, this fails with an MPU error instead of a stack
-	 * overflow because the priv stack is merged into the defined
-	 * stack.
-	 */
-#if !defined(CONFIG_ARC)
 	TC_PRINT("test stack HW-based overflow - user 1\n");
 	check_stack_overflow(stack_hw_overflow, K_USER);
 
 	TC_PRINT("test stack HW-based overflow - user 2\n");
 	check_stack_overflow(stack_hw_overflow, K_USER);
-#endif
 
 	TC_PRINT("test stack HW-based overflow - user priv stack 1\n");
 	check_stack_overflow(user_priv_stack_hw_overflow, K_USER);

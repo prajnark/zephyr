@@ -140,6 +140,9 @@ kconfig_to_ot_option(CONFIG_OPENTHREAD_VERHOEFF_CHECKSUM OT_VERHOEFF_CHECKSUM "V
 kconfig_to_ot_option(CONFIG_OPENTHREAD_WAKEUP_COORDINATOR OT_WAKEUP_COORDINATOR "Enable Wake-up Coordinator role")
 kconfig_to_ot_option(CONFIG_OPENTHREAD_WAKEUP_END_DEVICE OT_WAKEUP_END_DEVICE "Enable Wake-up End Device role")
 kconfig_to_ot_option_value(CONFIG_OPENTHREAD_RCP_RESTORATION_MAX_COUNT OT_RCP_RESTORATION_MAX_COUNT "Set the maximum number of RCP restoration attempts")
+kconfig_to_ot_option_value(CONFIG_OPENTHREAD_NET_DIAG_VENDOR_NAME OT_VENDOR_NAME "Set vendor name for network diagnostics")
+kconfig_to_ot_option_value(CONFIG_OPENTHREAD_NET_DIAG_VENDOR_MODEL OT_VENDOR_MODEL "Set vendor model for network diagnostics")
+kconfig_to_ot_option_value(CONFIG_OPENTHREAD_NET_DIAG_VENDOR_SW_VERSION OT_VENDOR_SW_VERSION "Set software version for network diagnostics")
 
 if(CONFIG_OPENTHREAD_COPROCESSOR_VENDOR_HOOK_SOURCE)
   set(OT_NCP_VENDOR_HOOK_SOURCE ${CONFIG_OPENTHREAD_COPROCESSOR_VENDOR_HOOK_SOURCE} CACHE STRING "NCP vendor hook source file name" FORCE)
@@ -149,7 +152,7 @@ if(CONFIG_OPENTHREAD_POWER_SUPPLY)
   set(OT_POWER_SUPPLY ${CONFIG_OPENTHREAD_POWER_SUPPLY} CACHE STRING "Power supply configuration" FORCE)
 endif()
 
-if (CONFIG_OPENTHREAD_CLI_VENDOR_EXTENSION)
+if(CONFIG_OPENTHREAD_CLI_VENDOR_EXTENSION)
   set(OT_CLI_VENDOR_EXTENSION ${CONFIG_OPENTHREAD_CLI_VENDOR_EXTENSION} CACHE STRING "Path to CMake file to define and link Openthread CLI vendor extension" FORCE)
 endif()
 
@@ -186,7 +189,7 @@ target_compile_definitions(ot-config INTERFACE ${OT_PARAM_LIST})
 # Since Mbed TLS 3.1.0 MBEDTLS_SSL_EXPORT_KEYS was removed as build symbol and
 # it's always assumed to be enabled. Corresponding kconfig was removed from
 # Zephyr as well, but OpenThread code still uses it, so we add it here.
-target_compile_definitions(ot-config INTERFACE -DMBEDTLS_SSL_EXPORT_KEYS)
+target_compile_definitions(ot-config INTERFACE MBEDTLS_SSL_EXPORT_KEYS)
 
 # Zephyr compiler options
 target_include_directories(ot-config INTERFACE

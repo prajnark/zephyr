@@ -100,6 +100,8 @@ enum sensor_channel {
 	SENSOR_CHAN_PROX,
 	/** Humidity, in percent. */
 	SENSOR_CHAN_HUMIDITY,
+	/** Ambient illuminance in visible spectrum, in lux. */
+	SENSOR_CHAN_AMBIENT_LIGHT,
 	/** Illuminance in visible spectrum, in lux. */
 	SENSOR_CHAN_LIGHT,
 	/** Illuminance in infra-red spectrum, in lux. */
@@ -113,12 +115,31 @@ enum sensor_channel {
 	/** Altitude, in meters */
 	SENSOR_CHAN_ALTITUDE,
 
+	/** PM1.0 concentration (standard particle, CF=1), in µg/m³ */
+	SENSOR_CHAN_PM_1_0_CF,
+	/** PM2.5 concentration (standard particle, CF=1), in µg/m³ */
+	SENSOR_CHAN_PM_2_5_CF,
+	/** PM10 concentration (standard particle, CF=1), in µg/m³ */
+	SENSOR_CHAN_PM_10_CF,
 	/** 1.0 micro-meters Particulate Matter, in ug/m^3 */
 	SENSOR_CHAN_PM_1_0,
 	/** 2.5 micro-meters Particulate Matter, in ug/m^3 */
 	SENSOR_CHAN_PM_2_5,
 	/** 10 micro-meters Particulate Matter, in ug/m^3 */
 	SENSOR_CHAN_PM_10,
+	/** Number of particles ≥ 0.3 µm per 0.1 liter of air */
+	SENSOR_CHAN_PM_0_3_COUNT,
+	/** Number of particles ≥ 0.5 µm per 0.1 liter of air */
+	SENSOR_CHAN_PM_0_5_COUNT,
+	/** Number of particles ≥ 1.0 µm per 0.1 liter of air */
+	SENSOR_CHAN_PM_1_0_COUNT,
+	/** Number of particles ≥ 2.5 µm per 0.1 liter of air */
+	SENSOR_CHAN_PM_2_5_COUNT,
+	/** Number of particles ≥ 5.0 µm per 0.1 liter of air */
+	SENSOR_CHAN_PM_5_COUNT,
+	/** Number of particles ≥ 10.0 µm per 0.1 liter of air */
+	SENSOR_CHAN_PM_10_COUNT,
+
 	/** Distance. From sensor to target, in meters */
 	SENSOR_CHAN_DISTANCE,
 
@@ -130,6 +151,8 @@ enum sensor_channel {
 	SENSOR_CHAN_VOC,
 	/** Gas sensor resistance in ohms. */
 	SENSOR_CHAN_GAS_RES,
+	/** Flow rate in litres per minute */
+	SENSOR_CHAN_FLOW_RATE,
 
 	/** Voltage, in volts **/
 	SENSOR_CHAN_VOLTAGE,
@@ -206,6 +229,9 @@ enum sensor_channel {
 	/** Gyroscope bias (X/Y/Z components in radians/s) */
 	SENSOR_CHAN_GBIAS_XYZ,
 
+	/** Raw quadrature decoder count, in counts */
+	SENSOR_CHAN_ENCODER_COUNT,
+
 	/** All channels. */
 	SENSOR_CHAN_ALL,
 
@@ -279,6 +305,9 @@ enum sensor_trigger_type {
 
 	/** Trigger fires when a tilt is detected. */
 	SENSOR_TRIG_TILT,
+
+	/** Trigger fires when data overflows. */
+	SENSOR_TRIG_OVERFLOW,
 
 	/**
 	 * Number of all common sensor triggers.
@@ -364,6 +393,8 @@ enum sensor_attribute {
 	SENSOR_ATTR_GAIN,
 	/* Configure the resolution of a sensor. */
 	SENSOR_ATTR_RESOLUTION,
+	/* Chip ID of the sensor*/
+	SENSOR_ATTR_CHIP_ID,
 	/**
 	 * Number of all common sensor attributes.
 	 */
@@ -482,15 +513,16 @@ static inline bool sensor_chan_spec_eq(struct sensor_chan_spec chan_spec0,
  */
 struct sensor_decoder_api {
 	/**
-	 * @brief Get the number of frames in the current buffer.
+	 * @brief Get the @p frame_count for a specified @p chan_spec from the @p buffer
 	 *
-	 * @param[in]  buffer The buffer provided on the @ref rtio context.
-	 * @param[in]  channel The channel to get the count for
-	 * @param[out] frame_count The number of frames on the buffer (at least 1)
-	 * @return 0 on success
-	 * @return -ENOTSUP if the channel/channel_idx aren't found
+	 * @param[in]  buffer      The buffer provided via the @ref rtio context
+	 * @param[in]  chan_spec   The channel specification to count
+	 * @param[out] frame_count The frame count for a specified @p chan_spec
+	 *
+	 * @retval 0       On success
+	 * @retval -EINVAL Invalid channel specification
 	 */
-	int (*get_frame_count)(const uint8_t *buffer, struct sensor_chan_spec channel,
+	int (*get_frame_count)(const uint8_t *buffer, struct sensor_chan_spec chan_spec,
 			       uint16_t *frame_count);
 
 	/**
@@ -511,7 +543,7 @@ struct sensor_decoder_api {
 	/**
 	 * @brief Decode up to @p max_count frames specified by @p chan_spec from the @p buffer
 	 *
-	 * Sample showing the process of decoding at most @code MAX_FRAMES for each distance
+	 * Sample showing the process of decoding at most `MAX_FRAMES` for each distance
 	 * sensor channel. The frame iterator is reset for each new channel to allow the
 	 * full history of each channel to be decoded.
 	 *
@@ -801,7 +833,7 @@ static inline int z_impl_sensor_attr_get(const struct device *dev,
  * CONTAINER_OF to retrieve a context pointer when the trigger is embedded in a
  * larger struct and requires that the trigger is not allocated on the stack.
  *
- * @funcprops \supervisor
+ * @supervisor
  *
  * @param dev Pointer to the sensor device
  * @param trig The trigger to activate

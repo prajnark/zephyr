@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#include <xtensa_asm2_s.h>
+#include <xtensa_asm2.inc.S>
 #include <zephyr/offsets.h>
 #include <zephyr/zsr.h>
 
@@ -344,7 +344,7 @@ noflush:
 	/* Switch stack pointer and restore.  The jump to
 	 * _restore_context does not return as such, but we arrange
 	 * for the restored "next" address to be immediately after for
-	 * sanity.
+	 * coherence.
 	 */
 	 l32i a1, a2, ___xtensa_irq_bsa_t_a2_OFFSET
 
@@ -579,6 +579,10 @@ _handle_tlb_miss_dblexc:
 	 */
 	rsr.ptevaddr a0
 	l32i a0, a0, 0
+
+	/* Restore EXCCAUSE and a0 values */
+	rsr a0, ZSR_EXCCAUSE_SAVE
+	wsr.exccause a0
 
 	rsr a0, ZSR_DBLEXC
 	rfde

@@ -209,11 +209,22 @@ config NET_CONFIG_CLOCK_SNTP_INIT
 	help
 	  Perform an SNTP request over networking to get and absolute
 	  wall clock time, and initialize system time from it, so
-	  functions like time(), gettimeofday(), etc. returned the
+	  functions like sys_clock_gettime(SYS_CLOCK_REALTIME, ...),
+	  time(), gettimeofday(), etc. returned the
 	  correct absolute time (no just time since system startup).
 	  Requires networking.
 
 if NET_CONFIG_CLOCK_SNTP_INIT
+
+ZEPHYR_RTC := zephyr,rtc
+
+config NET_CONFIG_CLOCK_SNTP_SET_RTC
+	bool "Set RTC on SNTP response"
+	depends on RTC
+	depends on $(dt_chosen_enabled,$(ZEPHYR_RTC))
+	help
+	  Set RTC when an SNTP response is received.
+	  Requires `zephyr,rtc` chosen.
 
 config NET_CONFIG_SNTP_INIT_SERVER
 	string "SNTP server to use for system clock init"
@@ -239,6 +250,7 @@ config NET_CONFIG_SNTP_INIT_TIMEOUT
 
 config NET_CONFIG_SNTP_INIT_RESYNC
 	bool "Resync system clock using SNTP periodically"
+	depends on NET_SOCKETS_SERVICE
 	help
 	  Perform an SNTP request over networking periodically to get and
 	  absolute wall clock time, and resync system time from it.
@@ -264,7 +276,7 @@ config NET_CONFIG_SNTP_INIT_USE_CONNECTION_MANAGER
 	depends on NET_CONNECTION_MANAGER
 	help
 	  If this option is set, then the connection manager is used to
-	  start and stop the SNTP server. This way an SNTP request is
+	  start and stop the SNTP client. This way an SNTP request is
 	  also sent everytime when the network connection is established.
 
 endif # NET_CONFIG_SNTP_INIT_RESYNC

@@ -6,7 +6,7 @@
 
 /dts-v1/;
 
-#include <nxp/nxp_rt1170_cm7.dtsi>
+#include <nxp/imxrt/nxp_rt1170_cm7.dtsi>
 #include "mimxrt1170_evk.dtsi"
 
 / {
@@ -87,6 +87,7 @@
 	status = "okay";
 };
 
+/* Choose lcdif as default controller. Change to lcdifv2 to switch controller. */
 zephyr_lcdif: &lcdif {};
 
 zephyr_mipi_dsi: &mipi_dsi {

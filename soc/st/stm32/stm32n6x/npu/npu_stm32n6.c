@@ -18,21 +18,12 @@
 /* Read-only driver configuration */
 struct npu_stm32_cfg {
 	/* Clock configuration. */
-	struct stm32_pclken pclken;
+	struct stm32_pclken pclken_npu;
+	struct stm32_pclken pclken_cacheaxi;
 	/* Reset configuration */
-	const struct reset_dt_spec reset;
+	const struct reset_dt_spec reset_npu;
+	const struct reset_dt_spec reset_cacheaxi;
 };
-
-static void npu_risaf_config(void)
-{
-	RIMC_MasterConfig_t RIMC_master = {0};
-
-	RIMC_master.MasterCID = RIF_CID_1;
-	RIMC_master.SecPriv = RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV;
-	HAL_RIF_RIMC_ConfigMasterAttributes(RIF_MASTER_INDEX_NPU, &RIMC_master);
-	HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_NPU,
-					      RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
-}
 
 static int npu_stm32_init(const struct device *dev)
 {
@@ -43,31 +34,35 @@ static int npu_stm32_init(const struct device *dev)
 		return -ENODEV;
 	}
 
-	if (clock_control_on(clk, (clock_control_subsys_t) &cfg->pclken) != 0) {
+	if (clock_control_on(clk, (clock_control_subsys_t)&cfg->pclken_npu) != 0) {
 		return -EIO;
 	}
 
-	if (!device_is_ready(cfg->reset.dev)) {
+	if (clock_control_on(clk, (clock_control_subsys_t)&cfg->pclken_cacheaxi) != 0) {
+		return -EIO;
+	}
+
+	if (!device_is_ready(cfg->reset_npu.dev)) {
 		return -ENODEV;
 	}
 
 	/* Reset timer to default state using RCC */
-	(void)reset_line_toggle_dt(&cfg->reset);
-
-	npu_risaf_config();
+	(void)reset_line_toggle_dt(&cfg->reset_npu);
+	(void)reset_line_toggle_dt(&cfg->reset_cacheaxi);
 
 	return 0;
 }
 
-
 static const struct npu_stm32_cfg npu_stm32_cfg = {
-	.pclken = {
-		.enr = DT_CLOCKS_CELL(DT_NODELABEL(npu), bits),
-		.bus = DT_CLOCKS_CELL(DT_NODELABEL(npu), bus),
-	},
-	.reset = RESET_DT_SPEC_GET(DT_NODELABEL(npu)),
+	.pclken_npu = STM32_DT_INST_CLOCK_INFO(0),
+	.reset_npu = RESET_DT_SPEC_INST_GET(0),
+	/*
+	 * Even if npu_cache node is disabled, its clocks must be enabled for NPU operation.
+	 * This is why we need to get clock and reset line from the npu_cache node.
+	 */
+	.pclken_cacheaxi = STM32_CLOCK_INFO(0, DT_NODELABEL(npu_cache)),
+	.reset_cacheaxi = RESET_DT_SPEC_GET(DT_NODELABEL(npu_cache)),
 };
 
-DEVICE_DT_DEFINE(DT_NODELABEL(npu), npu_stm32_init, NULL,
-		 NULL, &npu_stm32_cfg, POST_KERNEL,
-		 CONFIG_APPLICATION_INIT_PRIORITY, NULL);
+DEVICE_DT_INST_DEFINE(0, npu_stm32_init, NULL, NULL, &npu_stm32_cfg, POST_KERNEL,
+		      CONFIG_STM32N6_NPU_INIT_PRIORITY, NULL);

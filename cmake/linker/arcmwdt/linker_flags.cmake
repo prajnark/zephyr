@@ -41,7 +41,11 @@ check_set_linker_property(TARGET linker PROPERTY orphan_error
                           ${LINKERFLAGPREFIX},--orphan-handling=error
 )
 
+check_set_linker_property(TARGET linker PROPERTY undefined ${LINKERFLAGPREFIX},-u)
+
 set_property(TARGET linker PROPERTY partial_linking "-r")
+
+set_property(TARGET linker PROPERTY no_check_sections "${LINKERFLAGPREFIX},--no-check-sections")
 
 # Extra warnings options for twister run
 set_property(TARGET linker PROPERTY warnings_as_errors -Wl,--fatal-warnings)

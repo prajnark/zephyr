@@ -108,6 +108,7 @@ struct mcux_flexcomm_data {
 	bool pm_policy_state_lock;
 	struct k_work pm_lock_work;
 #endif
+	uint32_t usart_intenset;
 };
 
 #ifdef CONFIG_PM_POLICY_DEVICE_CONSTRAINTS
@@ -661,7 +662,7 @@ static int mcux_flexcomm_uart_rx_enable(const struct device *dev, uint8_t *buf,
 	data->rx_data.xfer_len = len;
 	data->rx_data.active_block.dest_address = (uint32_t)data->rx_data.xfer_buf;
 	data->rx_data.active_block.source_address = (uint32_t) &config->base->FIFORD;
-	data->tx_data.active_block.source_addr_adj = DMA_ADDR_ADJ_NO_CHANGE;
+	data->rx_data.active_block.source_addr_adj = DMA_ADDR_ADJ_NO_CHANGE;
 	data->rx_data.active_block.block_size = data->rx_data.xfer_len;
 
 	ret = dma_config(config->rx_dma.dev, config->rx_dma.channel,
@@ -1205,26 +1206,34 @@ static void mcux_flexcomm_pm_restore_wake(const struct device *dev,
 }
 #endif /* FC_UART_IS_WAKEUP */
 
-static uint32_t usart_intenset;
 static int mcux_flexcomm_pm_action(const struct device *dev, enum pm_device_action action)
 {
 	const struct mcux_flexcomm_config *config = dev->config;
+	struct mcux_flexcomm_data *data = dev->data;
 	int ret;
 
 	switch (action) {
 	case PM_DEVICE_ACTION_RESUME:
+		ret = pinctrl_apply_state(config->pincfg, PINCTRL_STATE_DEFAULT);
+		if (ret < 0 && ret != -ENOENT) {
+			return ret;
+		}
 		break;
 	case PM_DEVICE_ACTION_SUSPEND:
+		ret = pinctrl_apply_state(config->pincfg, PINCTRL_STATE_SLEEP);
+		if (ret < 0 && ret != -ENOENT) {
+			return ret;
+		}
 		break;
 	case PM_DEVICE_ACTION_TURN_OFF:
-		usart_intenset = USART_GetEnabledInterrupts(config->base);
+		data->usart_intenset = USART_GetEnabledInterrupts(config->base);
 		break;
 	case PM_DEVICE_ACTION_TURN_ON:
 		ret = mcux_flexcomm_init_common(dev);
 		if (ret) {
 			return ret;
 		}
-		USART_EnableInterrupts(config->base, usart_intenset);
+		USART_EnableInterrupts(config->base, data->usart_intenset);
 		break;
 	default:
 		return -ENOTSUP;
@@ -1438,8 +1447,9 @@ static void serial_mcux_flexcomm_##n##_pm_exit(enum pm_state state, uint8_t subs
 static const struct mcux_flexcomm_config mcux_flexcomm_##n##_config = {		\
 	.base = (USART_Type *)DT_INST_REG_ADDR(n),				\
 	.clock_dev = DEVICE_DT_GET(DT_INST_CLOCKS_CTLR(n)),			\
-	.clock_subsys =								\
-	(clock_control_subsys_t)DT_INST_CLOCKS_CELL(n, name),			\
+	.clock_subsys = (clock_control_subsys_t)COND_CODE_1(			\
+		DT_PHA_HAS_CELL(DT_DRV_INST(n), clocks, name),			\
+		(DT_INST_CLOCKS_CELL(n, name)), (0U)),				\
 	.baud_rate = DT_INST_PROP(n, current_speed),				\
 	.parity = DT_INST_ENUM_IDX(n, parity),					\
 	.pincfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),				\

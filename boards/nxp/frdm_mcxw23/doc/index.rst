@@ -100,6 +100,16 @@ The MCXW23 SoC has 3 FLEXCOMM interfaces for serial
 communication. One is configured as USART for the console, one is
 configured for I2C, and the other one is configured for SPI.
 
+Fetch Binary Blobs
+******************
+
+To support Bluetooth, frdm_mcxw23 requires fetching controller lib blobs, which can be
+achieved by running the following command:
+
+.. code-block:: console
+
+   west blobs fetch hal_nxp
+
 Programming and Debugging
 *************************
 
@@ -188,8 +198,15 @@ should see the following message in the terminal:
    *** Booting Zephyr OS build v4.2.0-2105-g48f2ffda26de ***
    Hello World! frdm_mcxw23/mcxw236
 
-.. include:: ../../common/board-footer.rst
-   :start-after: nxp-board-footer
+Power Management
+================
+
+When Power Management is enabled :kconfig:option:`CONFIG_PM`, OSTIMER is used as
+OS tick timer.
+
+Limitation: Wakeup pin can't be used as wakeup source in Standby mode.
+
+.. include:: ../../common/board-footer.rst.inc
 
 .. _MCXW23 SoC Website:
    https://www.nxp.com/products/MCX-W23

@@ -25,6 +25,7 @@ set_compiler_property(PROPERTY optimization_fast -Ofast)
 
 if(CMAKE_C_COMPILER_VERSION GREATER_EQUAL "4.5.0")
   set_compiler_property(PROPERTY optimization_lto -flto=auto)
+  set_compiler_property(PROPERTY optimization_lto_st -flto=1)
   set_compiler_property(PROPERTY prohibit_lto -fno-lto)
 endif()
 
@@ -46,6 +47,8 @@ check_set_compiler_property(APPEND PROPERTY warning_base -Wno-pointer-sign)
 
 # Prohibit void pointer arithmetic. Illegal in C99
 check_set_compiler_property(APPEND PROPERTY warning_base -Wpointer-arith)
+
+check_set_compiler_property(PROPERTY warning_no_misleading_indentation -Wno-misleading-indentation)
 
 # not portable
 check_set_compiler_property(APPEND PROPERTY warning_base -Wexpansion-to-defined)
@@ -113,7 +116,7 @@ set_compiler_property(PROPERTY warning_error_coding_guideline
 # GCC compiler flags for C standard. The specific standard must be appended by user.
 set_compiler_property(PROPERTY cstd -std=)
 
-if (NOT CONFIG_NEWLIB_LIBC AND
+if(NOT CONFIG_NEWLIB_LIBC AND
     NOT (CONFIG_PICOLIBC AND NOT CONFIG_PICOLIBC_USE_MODULE) AND
     NOT COMPILER STREQUAL "xcc" AND
     NOT COMPILER STREQUAL "xt-clang" AND
@@ -279,3 +282,10 @@ set_compiler_property(PROPERTY no_function_sections "-fno-function-sections")
 
 # Compiler flag for not placing variables in their own sections:
 set_compiler_property(PROPERTY no_data_sections "-fno-data-sections")
+
+# Compiler flag to enable function instrumentation
+set_compiler_property(PROPERTY func_instrumentation "-finstrument-functions")
+set_compiler_property(PROPERTY func_instrumentation_exclude_function_list
+  "-finstrument-functions-exclude-function-list=${CONFIG_INSTRUMENTATION_EXCLUDE_FUNCTION_LIST}")
+set_compiler_property(PROPERTY func_instrumentation_exclude_file_list
+  "-finstrument-functions-exclude-file-list=${CONFIG_INSTRUMENTATION_EXCLUDE_FILE_LIST}")

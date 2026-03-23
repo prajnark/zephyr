@@ -34,6 +34,11 @@ set(LLEXT_REMOVE_FLAGS
   -fdata-sections
 )
 
+# llext.rodata.noreloc will be incorrectly marked writable if -Hccm is not removed
+if(DEFINED CONFIG_LLEXT_RODATA_NO_RELOC)
+  list(APPEND LLEXT_REMOVE_FLAGS -Hccm)
+endif()
+
 # For CMake to be able to test if a compiler flag is supported by the toolchain
 # (check_c_compiler_flag function which we wrap with target_cc_option in extensions.cmake)
 # we rely on default MWDT header locations and don't manually specify headers directories.
@@ -63,3 +68,6 @@ endif()
 # The MWDT compiler doesn't need to pass any properties to the linker as for now
 function(compiler_set_linker_properties)
 endfunction()
+
+# Include architecture-specific settings
+include(${CMAKE_CURRENT_LIST_DIR}/target_${ARCH}.cmake OPTIONAL)

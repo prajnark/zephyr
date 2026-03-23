@@ -9,6 +9,7 @@
 
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/drivers/clock_control/stm32_clock_control.h>
+#include <zephyr/linker/devicetree_regions.h>
 #include <zephyr/kernel.h>
 #include <zephyr/net/ethernet.h>
 #include <zephyr/net/phy.h>
@@ -33,9 +34,14 @@ extern const struct device *eth_stm32_phy_dev;
 	    DT_NODE_HAS_STATUS_OKAY(DT_CHOSEN(zephyr_dtcm))
 #define __eth_stm32_desc __dtcm_noinit_section
 #define __eth_stm32_buf  __dtcm_noinit_section
-#elif defined(CONFIG_SOC_SERIES_STM32H7X)
+#elif defined(CONFIG_SOC_SERIES_STM32H7X) || defined(CONFIG_SOC_SERIES_STM32H7RSX)
 #define __eth_stm32_desc __attribute__((section(".eth_stm32_desc")))
 #define __eth_stm32_buf  __attribute__((section(".eth_stm32_buf")))
+#elif defined(CONFIG_SOC_SERIES_STM32MP13X)
+#define ETH_DMA_REGION  DT_INST_PHANDLE(0, memory_regions)
+#define ETH_SECTION Z_GENERIC_SECTION(LINKER_DT_NODE_REGION_NAME_TOKEN(ETH_DMA_REGION))
+#define __eth_stm32_desc __aligned(32) ETH_SECTION
+#define __eth_stm32_buf  __aligned(32) ETH_SECTION
 #elif defined(CONFIG_NOCACHE_MEMORY)
 #define __eth_stm32_desc __nocache __aligned(4)
 #define __eth_stm32_buf  __nocache __aligned(4)
@@ -44,25 +50,10 @@ extern const struct device *eth_stm32_phy_dev;
 #define __eth_stm32_buf  __aligned(4)
 #endif
 
-#if DT_HAS_COMPAT_STATUS_OKAY(st_stm32n6_ethernet)
-#define STM32_ETH_PHY_MODE(inst) \
-	((DT_INST_ENUM_HAS_VALUE(inst, phy_connection_type, rgmii) ? ETH_RGMII_MODE : \
-	 (DT_INST_ENUM_HAS_VALUE(inst, phy_connection_type, gmii) ? ETH_GMII_MODE : \
-	 (DT_INST_ENUM_HAS_VALUE(inst, phy_connection_type, mii) ? ETH_MII_MODE : \
-		 ETH_RMII_MODE))))
-#else
-#define STM32_ETH_PHY_MODE(inst) \
-	(DT_INST_ENUM_HAS_VALUE(inst, phy_connection_type, mii) ? \
-		ETH_MII_MODE : ETH_RMII_MODE)
-#endif
-
 #if defined(CONFIG_ETH_STM32_HAL_API_V1)
 
 #define ETH_MII_MODE	ETH_MEDIA_INTERFACE_MII
 #define ETH_RMII_MODE	ETH_MEDIA_INTERFACE_RMII
-
-#define ETH_STM32_AUTO_NEGOTIATION_ENABLE                                                          \
-	UTIL_NOT(DT_NODE_HAS_PROP(DT_INST_PHANDLE(0, phy_handle), fixed_link))
 
 #else /* CONFIG_ETH_STM32_HAL_API_V2 */
 
@@ -77,35 +68,52 @@ struct eth_stm32_tx_context {
 
 #endif /* CONFIG_ETH_STM32_HAL_API_V2 */
 
+#if DT_HAS_COMPAT_STATUS_OKAY(st_stm32n6_ethernet)
+
+#define ETH_GMII_MODE	HAL_ETH_GMII_MODE
+#define ETH_RGMII_MODE	HAL_ETH_RGMII_MODE
+
+#define STM32_ETH_PHY_MODE(inst) \
+	((DT_INST_ENUM_HAS_VALUE(inst, phy_connection_type, rgmii) ? ETH_RGMII_MODE : \
+	 (DT_INST_ENUM_HAS_VALUE(inst, phy_connection_type, gmii) ? ETH_GMII_MODE : \
+	 (DT_INST_ENUM_HAS_VALUE(inst, phy_connection_type, mii) ? ETH_MII_MODE : \
+								ETH_RMII_MODE))))
+#else
+#define STM32_ETH_PHY_MODE(inst) \
+	(DT_INST_ENUM_HAS_VALUE(inst, phy_connection_type, mii) ? \
+		ETH_MII_MODE : ETH_RMII_MODE)
+#endif
+
 /* Definition of the Ethernet driver buffers size and count */
 #define ETH_STM32_RX_BUF_SIZE	ETH_MAX_PACKET_SIZE /* buffer size for receive */
 #define ETH_STM32_TX_BUF_SIZE	ETH_MAX_PACKET_SIZE /* buffer size for transmit */
 
 BUILD_ASSERT(ETH_STM32_RX_BUF_SIZE % 4 == 0, "Rx buffer size must be a multiple of 4");
 
-extern uint8_t dma_rx_buffer[ETH_RXBUFNB][ETH_STM32_RX_BUF_SIZE] __eth_stm32_buf;
-extern uint8_t dma_tx_buffer[ETH_TXBUFNB][ETH_STM32_TX_BUF_SIZE] __eth_stm32_buf;
+extern uint8_t dma_rx_buffer[ETH_RXBUFNB][ETH_STM32_RX_BUF_SIZE];
+extern uint8_t dma_tx_buffer[ETH_TXBUFNB][ETH_STM32_TX_BUF_SIZE];
 
 #if DT_HAS_COMPAT_STATUS_OKAY(st_stm32n6_ethernet)
-extern ETH_DMADescTypeDef dma_rx_desc_tab[ETH_DMA_RX_CH_CNT][ETH_RXBUFNB]
-								ALIGN_32BYTES(__eth_stm32_desc);
-extern ETH_DMADescTypeDef dma_tx_desc_tab[ETH_DMA_TX_CH_CNT][ETH_TXBUFNB]
-								ALIGN_32BYTES(__eth_stm32_desc);
+extern ETH_DMADescTypeDef dma_rx_desc_tab[ETH_DMA_RX_CH_CNT][ETH_RXBUFNB];
+extern ETH_DMADescTypeDef dma_tx_desc_tab[ETH_DMA_TX_CH_CNT][ETH_TXBUFNB];
 #else
-extern ETH_DMADescTypeDef dma_rx_desc_tab[ETH_RXBUFNB] __eth_stm32_desc;
-extern ETH_DMADescTypeDef dma_tx_desc_tab[ETH_TXBUFNB] __eth_stm32_desc;
+extern ETH_DMADescTypeDef dma_rx_desc_tab[ETH_RXBUFNB];
+extern ETH_DMADescTypeDef dma_tx_desc_tab[ETH_TXBUFNB];
 #endif
 
 /* Device constant configuration parameters */
 struct eth_stm32_hal_dev_cfg {
 	void (*config_func)(void);
-	struct stm32_pclken pclken;
-	struct stm32_pclken pclken_rx;
-	struct stm32_pclken pclken_tx;
-#if DT_INST_CLOCKS_HAS_NAME(0, mac_clk_ptp)
-	struct stm32_pclken pclken_ptp;
+	const struct stm32_pclken *pclken;
+	uint8_t pclken_cnt;
+	/* Index of the clock used for kernel clock selection ("eth-ker"), or UINT8_MAX if none */
+	uint8_t kclk_sel_idx;
+#ifdef CONFIG_PTP_CLOCK_STM32_HAL
+	/* Index of the clock that gives the ethernet clock rate */
+	uint8_t rate_pclken_idx;
 #endif
 	const struct pinctrl_dev_config *pcfg;
+	const struct net_eth_mac_config mac_cfg;
 };
 
 /* Device run time data */
@@ -113,7 +121,6 @@ struct eth_stm32_hal_dev_data {
 	struct net_if *iface;
 	uint8_t mac_addr[6];
 	ETH_HandleTypeDef heth;
-	struct k_mutex tx_mutex;
 	struct k_sem rx_int_sem;
 #if defined(CONFIG_ETH_STM32_HAL_API_V2)
 	struct k_sem tx_int_sem;

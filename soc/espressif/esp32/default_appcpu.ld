@@ -115,10 +115,14 @@ SECTIONS
   } > metadata
 
   #include <zephyr/linker/rel-sections.ld>
-
-#ifdef CONFIG_LLEXT
   #include <zephyr/linker/llext-sections.ld>
-#endif
+
+  .rtc.force_slow (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.rtc.force_slow .rtc.force_slow.*)
+    . = ALIGN(4);
+  } GROUP_LINK_IN(RAMABLE_REGION)
 
   /* --- START OF IRAM --- */
 
@@ -404,6 +408,11 @@ SECTIONS
     . = ALIGN (8);
     *(.noinit)
     *(.noinit.*)
+#ifdef CONFIG_LLEXT
+    *(.llext_heap)
+    *(.llext_ext_heap)
+    *(.llext_metadata_heap)
+#endif /* CONFIG_LLEXT */
     . = ALIGN (8);
   } GROUP_LINK_IN(RAMABLE_REGION)
 

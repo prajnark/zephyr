@@ -58,7 +58,7 @@ static int ethernet_set_config(uint64_t mgmt_request,
 		 */
 		if (IS_ENABLED(CONFIG_NET_NATIVE_IPV6) &&
 		    IS_ENABLED(CONFIG_NET_IPV6_IID_EUI_64)) {
-			struct in6_addr iid;
+			struct net_in6_addr iid;
 
 			net_ipv6_addr_create_iid(&iid,
 						 net_if_get_link_addr(iface));
@@ -177,7 +177,7 @@ static int ethernet_set_config(uint64_t mgmt_request,
 		return -EINVAL;
 	}
 
-	return api->set_config(net_if_get_device(iface), type, &config);
+	return api->set_config(dev, type, &config);
 }
 
 NET_MGMT_REGISTER_REQUEST_HANDLER(NET_REQUEST_ETHERNET_SET_MAC_ADDRESS,

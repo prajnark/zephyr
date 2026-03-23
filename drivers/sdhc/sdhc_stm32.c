@@ -6,6 +6,7 @@
 
 #define DT_DRV_COMPAT st_stm32_sdio
 
+#include <stm32_bitops.h>
 #include <zephyr/cache.h>
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/drivers/clock_control/stm32_clock_control.h>
@@ -210,10 +211,6 @@ static int sdhc_stm32_activate(const struct device *dev)
 	const struct sdhc_stm32_config *config = (struct sdhc_stm32_config *)dev->config;
 	const struct device *const clk = DEVICE_DT_GET(STM32_CLOCK_CONTROL_NODE);
 
-	if (!device_is_ready(clk)) {
-		return -ENODEV;
-	}
-
 	ret = pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
 	if (ret < 0) {
 		return ret;
@@ -333,6 +330,12 @@ static int sdhc_stm32_rw_extended(const struct device *dev, struct sdhc_command 
 	}
 
 	if (!IS_ENABLED(CONFIG_SDHC_STM32_POLLING_SUPPORT)) {
+		/* Only wait on semaphore if HAL function succeeded */
+		if (res != HAL_OK) {
+			k_free(dev_data->sdio_dma_buf);
+			return -EIO;
+		}
+
 		/* Wait for whole transfer to complete */
 		if (k_sem_take(&dev_data->device_sync_sem, K_MSEC(CONFIG_SD_CMD_TIMEOUT)) != 0) {
 			k_free(dev_data->sdio_dma_buf);
@@ -517,7 +520,8 @@ static int sdhc_stm32_set_io(const struct device *dev, struct sdhc_io *ios)
 			bus_width_reg_value = SDMMC_BUS_WIDE_1B;
 		}
 
-		MODIFY_REG(config->hsd->Instance->CLKCR, SDMMC_CLKCR_WIDBUS, bus_width_reg_value);
+		stm32_reg_modify_bits(&config->hsd->Instance->CLKCR, SDMMC_CLKCR_WIDBUS,
+				      bus_width_reg_value);
 		host_io->bus_width = ios->bus_width;
 	}
 
@@ -543,7 +547,7 @@ static void sdhc_stm32_init_props(const struct device *dev)
 	props->host_caps.vol_330_support = true;
 	props->host_caps.vol_180_support = sdhc_config->support_1_8_v;
 	props->host_caps.bus_8_bit_support = (sdhc_config->bus_width == SDHC_BUS_WIDTH8BIT);
-	props->host_caps.bus_4_bit_support = (sdhc_config->bus_width == SDHC_BUS_WIDTH4BIT);
+	props->bus_4_bit_support = (sdhc_config->bus_width == SDHC_BUS_WIDTH4BIT);
 }
 
 static int sdhc_stm32_get_host_props(const struct device *dev, struct sdhc_host_props *props)

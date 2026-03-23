@@ -1,6 +1,5 @@
 /*
- * Copyright 2025 NXP
- *
+ * SPDX-FileCopyrightText: Copyright 2025-2026 NXP
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +9,7 @@ LOG_MODULE_REGISTER(net_dsa_port, CONFIG_NET_DSA_LOG_LEVEL);
 #include <zephyr/net/ethernet.h>
 #include <zephyr/net/phy.h>
 #include <zephyr/net/dsa_core.h>
-#include "dsa_tag.h"
+#include <zephyr/net/dsa_tag.h>
 
 #if defined(CONFIG_NET_INTERFACE_NAME_LEN)
 #define INTERFACE_NAME_LEN CONFIG_NET_INTERFACE_NAME_LEN
@@ -78,7 +77,7 @@ static void dsa_port_iface_init(struct net_if *iface)
 	char name[INTERFACE_NAME_LEN];
 
 	/* Set interface name */
-	snprintf(name, sizeof(name), "swp%d", cfg->port_idx);
+	snprintk(name, sizeof(name), "swp%d", cfg->port_idx);
 	net_if_set_name(iface, name);
 
 	/* Use random mac address if could */
@@ -89,6 +88,10 @@ static void dsa_port_iface_init(struct net_if *iface)
 	net_if_set_link_addr(iface, cfg->mac_addr, sizeof(cfg->mac_addr), NET_LINK_ETHERNET);
 
 	if (cfg->ethernet_connection != NULL) {
+		/* DSA CPU port used only for DSA management */
+		net_if_flag_clear(iface, NET_IF_IPV4);
+		net_if_flag_clear(iface, NET_IF_IPV6);
+
 		net_if_carrier_off(iface);
 		return;
 	}
@@ -133,6 +136,7 @@ const struct device *dsa_port_get_ptp_clock(const struct device *dev)
 
 enum ethernet_hw_caps dsa_port_get_capabilities(const struct device *dev)
 {
+	struct dsa_switch_context *dsa_switch_ctx = dev->data;
 	uint32_t caps = 0;
 
 #ifdef CONFIG_NET_L2_PTP
@@ -140,7 +144,36 @@ enum ethernet_hw_caps dsa_port_get_capabilities(const struct device *dev)
 		caps |= ETHERNET_PTP;
 	}
 #endif
+
+	if (dsa_switch_ctx->dapi->get_capabilities) {
+		caps |= dsa_switch_ctx->dapi->get_capabilities(dev);
+	}
+
 	return caps;
+}
+
+static int dsa_set_config(const struct device *dev, enum ethernet_config_type type,
+			  const struct ethernet_config *config)
+{
+	struct dsa_switch_context *dsa_switch_ctx = dev->data;
+
+	if (!dsa_switch_ctx->dapi->set_config) {
+		return -ENOTSUP;
+	}
+
+	return dsa_switch_ctx->dapi->set_config(dev, type, config);
+}
+
+static int dsa_get_config(const struct device *dev, enum ethernet_config_type type,
+			  struct ethernet_config *config)
+{
+	struct dsa_switch_context *dsa_switch_ctx = dev->data;
+
+	if (!dsa_switch_ctx->dapi->get_config) {
+		return -ENOTSUP;
+	}
+
+	return dsa_switch_ctx->dapi->get_config(dev, type, config);
 }
 
 const struct ethernet_api dsa_eth_api = {
@@ -151,4 +184,6 @@ const struct ethernet_api dsa_eth_api = {
 	.get_ptp_clock = dsa_port_get_ptp_clock,
 #endif
 	.get_capabilities = dsa_port_get_capabilities,
+	.set_config = dsa_set_config,
+	.get_config = dsa_get_config,
 };

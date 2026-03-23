@@ -5,7 +5,7 @@
  */
 
 #include <zephyr/dt-bindings/pinctrl/esp-pinctrl-common.h>
-#include <dt-bindings/pinctrl/esp32c3-pinctrl.h>
+#include <zephyr/dt-bindings/pinctrl/esp32c3-pinctrl.h>
 #include <zephyr/dt-bindings/pinctrl/esp32c3-gpio-sigmap.h>
 
 &pinctrl {
@@ -18,6 +18,14 @@
 		group2 {
 			pinmux = <UART0_RX_GPIO20>;
 			bias-pull-up;
+		};
+	};
+
+	uart0_sleep: uart0_sleep {
+		group1 {
+			pinmux = <UART0_TX_GPIO21>,
+				 <UART0_RX_GPIO20>;
+			drive-open-drain;
 		};
 	};
 
@@ -41,6 +49,16 @@
 			bias-pull-up;
 			drive-open-drain;
 			output-high;
+		};
+	};
+
+	i2s_default: i2s_default {
+		group1 {
+			pinmux = <I2S_MCLK_GPIO19>,
+				 <I2S_O_WS_GPIO6>,
+				 <I2S_O_BCK_GPIO7>,
+				 <I2S_O_SD_GPIO8>,
+				 <I2S_I_SD_GPIO18>;
 		};
 	};
 

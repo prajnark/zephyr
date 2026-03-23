@@ -13,12 +13,16 @@ toolchain:
   - cross-compile
 ram: 1024
 supported:
+  - counter
   - gpio
   - uart
   - i2c
   - spi
   - can
   - net
+  - watchdog
+  - usbd
+  - pwm
 testing:
   ignore_tags:
     - bluetooth

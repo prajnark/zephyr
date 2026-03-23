@@ -17,27 +17,35 @@ find_package(Zephyr
   REQUIRED HINTS $ENV{ZEPHYR_BASE}
   )
 
+# Needed since the CMakeLists.txt that would normally set this is not run in this image.
+include(${ZEPHYR_BASE}/modules/hal_nordic/ironside/se/ironside_support_dir.cmake)
+
 project(uicr)
 
 # Function to parse a Kconfig value from a .config file
 function(parse_kconfig_value config_file config_name output_var)
   file(STRINGS ${config_file} config_lines ENCODING "UTF-8")
   foreach(line ${config_lines})
+    # Match quoted strings like CONFIG_FOO="value"
     if("${line}" MATCHES "^${config_name}=\"(.*)\"$")
       set(${output_var} "${CMAKE_MATCH_1}" PARENT_SCOPE)
       return()
     endif()
+    # Match unquoted values like CONFIG_FOO=y or CONFIG_FOO=n
+    if("${line}" MATCHES "^${config_name}=(.*)$")
+      set(${output_var} "${CMAKE_MATCH_1}" PARENT_SCOPE)
+      return()
+    endif()
   endforeach()
+  # If not found, return empty (including "# CONFIG_FOO is not set" case)
+  set(${output_var} "" PARENT_SCOPE)
 endfunction()
 
 # Function to compute partition absolute address and size from devicetree
 function(compute_partition_address_and_size partition_nodelabel output_address_var output_size_var)
   dt_nodelabel(partition_path NODELABEL ${partition_nodelabel} REQUIRED)
-  dt_reg_addr(partition_offset PATH ${partition_path} REQUIRED)
+  dt_reg_addr(partition_address PATH ${partition_path} REQUIRED)
   dt_reg_size(partition_size PATH ${partition_path} REQUIRED)
-
-  # Calculate absolute partition address
-  math(EXPR partition_address "${CONFIG_FLASH_BASE_ADDRESS} + ${partition_offset}" OUTPUT_FORMAT HEXADECIMAL)
 
   # Set output variables in parent scope
   set(${output_address_var} ${partition_address} PARENT_SCOPE)
@@ -67,14 +75,24 @@ endfunction()
 if(CMAKE_VERBOSE_MAKEFILE)
 endif()
 
+set(lock_args)
+set(eraseprotect_args)
+set(approtect_args)
 set(protectedmem_args)
 set(periphconf_args)
+set(mpcconf_args)
+set(wdtstart_args)
 set(periphconf_elfs)
+set(mpcconf_elfs)
+set(policy_args)
 set(merged_hex_file ${APPLICATION_BINARY_DIR}/zephyr/${CONFIG_KERNEL_BIN_NAME}.hex)
 set(secondary_periphconf_elfs)
+set(secondary_mpcconf_elfs)
 set(uicr_hex_file ${APPLICATION_BINARY_DIR}/zephyr/uicr.hex)
 set(periphconf_hex_file ${APPLICATION_BINARY_DIR}/zephyr/periphconf.hex)
 set(secondary_periphconf_hex_file ${APPLICATION_BINARY_DIR}/zephyr/secondary_periphconf.hex)
+set(mpcconf_hex_file ${APPLICATION_BINARY_DIR}/zephyr/mpcconf.hex)
+set(secondary_mpcconf_hex_file ${APPLICATION_BINARY_DIR}/zephyr/secondary_mpcconf.hex)
 
 # Get UICR absolute address from this image's devicetree
 dt_nodelabel(uicr_path NODELABEL "uicr" REQUIRED)
@@ -106,13 +124,64 @@ if(CONFIG_GEN_UICR_SECURESTORAGE)
   list(APPEND securestorage_args --cpurad-its-size ${CPURAD_ITS_SIZE})
 endif(CONFIG_GEN_UICR_SECURESTORAGE)
 
+# Handle LOCK configuration
+if(CONFIG_GEN_UICR_LOCK)
+  list(APPEND lock_args --lock)
+endif()
+
+# Handle ERASEPROTECT configuration
+if(CONFIG_GEN_UICR_ERASEPROTECT)
+  list(APPEND eraseprotect_args --eraseprotect)
+endif()
+
+# Handle APPROTECT configuration
+if(CONFIG_GEN_UICR_APPROTECT_APPLICATION_PROTECTED)
+  list(APPEND approtect_args --approtect-application-protected)
+endif()
+
+if(CONFIG_GEN_UICR_APPROTECT_RADIOCORE_PROTECTED)
+  list(APPEND approtect_args --approtect-radiocore-protected)
+endif()
+
+if(CONFIG_GEN_UICR_APPROTECT_CORESIGHT_PROTECTED)
+  list(APPEND approtect_args --approtect-coresight-protected)
+endif()
+
 # Handle protected memory configuration
 if(CONFIG_GEN_UICR_PROTECTEDMEM)
   list(APPEND protectedmem_args --protectedmem)
   list(APPEND protectedmem_args --protectedmem-size-bytes ${CONFIG_GEN_UICR_PROTECTEDMEM_SIZE_BYTES})
 endif()
 
-if(CONFIG_GEN_UICR_GENERATE_PERIPHCONF)
+# Handle WDTSTART configuration
+if(CONFIG_GEN_UICR_WDTSTART)
+  list(APPEND wdtstart_args --wdtstart)
+  list(APPEND wdtstart_args --wdtstart-instance-code ${CONFIG_GEN_UICR_WDTSTART_INSTANCE_CODE})
+  list(APPEND wdtstart_args --wdtstart-crv ${CONFIG_GEN_UICR_WDTSTART_CRV})
+endif()
+
+if(CONFIG_GEN_UICR_MPCCONF)
+  list(APPEND mpcconf_args --mpcconf)
+
+  # Compute MPCCONF absolute address and size from this image's devicetree
+  compute_partition_address_and_size("mpcconf_partition" MPCCONF_ADDRESS MPCCONF_SIZE)
+
+  list(APPEND mpcconf_args --mpcconf-address ${MPCCONF_ADDRESS})
+  list(APPEND mpcconf_args --mpcconf-size ${MPCCONF_SIZE})
+endif()
+
+if(CONFIG_GEN_UICR_PERIPHCONF)
+  list(APPEND periphconf_args --periphconf)
+
+  # Compute PERIPHCONF absolute address and size from this image's devicetree
+  compute_partition_address_and_size("periphconf_partition" PERIPHCONF_ADDRESS PERIPHCONF_SIZE)
+
+  list(APPEND periphconf_args --periphconf-address ${PERIPHCONF_ADDRESS})
+  list(APPEND periphconf_args --periphconf-size ${PERIPHCONF_SIZE})
+endif()
+
+if(CONFIG_GEN_UICR_GENERATE_PERIPHCONF OR CONFIG_GEN_UICR_SECONDARY_GENERATE_PERIPHCONF OR
+   CONFIG_GEN_UICR_GENERATE_MPCCONF OR CONFIG_GEN_UICR_SECONDARY_GENERATE_MPCCONF)
   # gen_uicr.py parses all zephyr.elf files. To find these files (which
   # have not been built yet) we scan sibling build directories for
   # zephyr.dts
@@ -127,31 +196,56 @@ if(CONFIG_GEN_UICR_GENERATE_PERIPHCONF)
     endif()
 
     if(EXISTS ${_dir}/zephyr/zephyr.dts)
+      # If the PERIPHCONF is configured to remain in the firmware, do not include it here.
+      parse_kconfig_value(${_dir}/zephyr/.config CONFIG_NRF_PERIPHCONF_SECTION_STRIP strip_periphconf)
+      if(NOT (strip_periphconf STREQUAL "y"))
+        continue()
+      endif()
+
+      parse_kconfig_value(${_dir}/zephyr/.config CONFIG_NRF_PERIPHCONF_SECTION has_periphconf)
+      parse_kconfig_value(${_dir}/zephyr/.config CONFIG_NRF_MPCCONF_SECTION has_mpcconf)
+
       # Read CONFIG_KERNEL_BIN_NAME from the sibling's .config file
       parse_kconfig_value(${_dir}/zephyr/.config CONFIG_KERNEL_BIN_NAME kernel_bin_name)
       set(kernel_elf_path ${_dir}/zephyr/${kernel_bin_name}.elf)
 
-      # Check if this is secondary firmware by looking for the marker file
-      if(EXISTS ${_dir}/is_secondary_firmware.txt)
-        list(APPEND secondary_periphconf_elfs ${kernel_elf_path})
+      # Check if this is secondary firmware by reading the Kconfig from .config
+      parse_kconfig_value(${_dir}/zephyr/.config CONFIG_IS_IRONSIDE_SE_SECONDARY_IMAGE is_secondary)
+      if(is_secondary STREQUAL "y")
+        if(has_periphconf)
+          list(APPEND secondary_periphconf_elfs ${kernel_elf_path})
+        endif()
+        if(has_mpcconf)
+          list(APPEND secondary_mpcconf_elfs ${kernel_elf_path})
+        endif()
       else()
-        list(APPEND periphconf_elfs ${kernel_elf_path})
+        if(has_periphconf)
+          list(APPEND periphconf_elfs ${kernel_elf_path})
+        endif()
+        if(has_mpcconf)
+          list(APPEND mpcconf_elfs ${kernel_elf_path})
+        endif()
       endif()
     endif()
   endforeach()
 
-  # Compute PERIPHCONF absolute address and size from this image's devicetree
-  compute_partition_address_and_size("periphconf_partition" PERIPHCONF_ADDRESS PERIPHCONF_SIZE)
+  if(CONFIG_GEN_UICR_GENERATE_PERIPHCONF)
+    # Set up periphconf arguments for gen_uicr.py
+    list(APPEND periphconf_args --out-periphconf-hex ${periphconf_hex_file})
 
-  # Set up periphconf arguments for gen_uicr.py
-  list(APPEND periphconf_args --periphconf-address ${PERIPHCONF_ADDRESS})
-  list(APPEND periphconf_args --periphconf-size ${PERIPHCONF_SIZE})
-  list(APPEND periphconf_args --out-periphconf-hex ${periphconf_hex_file})
+    foreach(elf ${periphconf_elfs})
+      list(APPEND periphconf_args --in-periphconf-elf ${elf})
+    endforeach()
+  endif()
+  if(CONFIG_GEN_UICR_GENERATE_MPCCONF)
+    # Set up mpcconf arguments for gen_uicr.py
+    list(APPEND mpcconf_args --out-mpcconf-hex ${mpcconf_hex_file})
 
-  foreach(elf ${periphconf_elfs})
-    list(APPEND periphconf_args --in-periphconf-elf ${elf})
-  endforeach()
-endif(CONFIG_GEN_UICR_GENERATE_PERIPHCONF)
+    foreach(elf ${mpcconf_elfs})
+      list(APPEND mpcconf_args --in-mpcconf-elf ${elf})
+    endforeach()
+  endif()
+endif()
 
 if(CONFIG_GEN_UICR_SECONDARY)
   set(secondary_args --secondary)
@@ -164,32 +258,113 @@ if(CONFIG_GEN_UICR_SECONDARY)
     --secondary-processor ${CONFIG_GEN_UICR_SECONDARY_PROCESSOR_VALUE}
     )
 
-  if(CONFIG_GEN_UICR_SECONDARY_GENERATE_PERIPHCONF)
+  # Handle secondary WDTSTART configuration
+  if(CONFIG_GEN_UICR_SECONDARY_WDTSTART)
+    list(APPEND secondary_args --secondary-wdtstart)
+    list(APPEND secondary_args --secondary-wdtstart-instance-code ${CONFIG_GEN_UICR_SECONDARY_WDTSTART_INSTANCE_CODE})
+    list(APPEND secondary_args --secondary-wdtstart-crv ${CONFIG_GEN_UICR_SECONDARY_WDTSTART_CRV})
+  endif()
+
+  # Handle secondary TRIGGER configuration
+  if(CONFIG_GEN_UICR_SECONDARY_TRIGGER)
+    list(APPEND secondary_args --secondary-trigger)
+
+    # Compute RESETREAS bitmask from individual trigger configs
+    set(resetreas_value 0)
+    if(CONFIG_GEN_UICR_SECONDARY_TRIGGER_APPLICATIONWDT0)
+      math(EXPR resetreas_value "${resetreas_value} + 0x001")
+    endif()
+    if(CONFIG_GEN_UICR_SECONDARY_TRIGGER_APPLICATIONWDT1)
+      math(EXPR resetreas_value "${resetreas_value} + 0x002")
+    endif()
+    if(CONFIG_GEN_UICR_SECONDARY_TRIGGER_APPLICATIONLOCKUP)
+      math(EXPR resetreas_value "${resetreas_value} + 0x008")
+    endif()
+    if(CONFIG_GEN_UICR_SECONDARY_TRIGGER_RADIOCOREWDT0)
+      math(EXPR resetreas_value "${resetreas_value} + 0x020")
+    endif()
+    if(CONFIG_GEN_UICR_SECONDARY_TRIGGER_RADIOCOREWDT1)
+      math(EXPR resetreas_value "${resetreas_value} + 0x040")
+    endif()
+    if(CONFIG_GEN_UICR_SECONDARY_TRIGGER_RADIOCORELOCKUP)
+      math(EXPR resetreas_value "${resetreas_value} + 0x100")
+    endif()
+
+    list(APPEND secondary_args --secondary-trigger-resetreas ${resetreas_value})
+  endif()
+
+  # Handle secondary PROTECTEDMEM configuration
+  if(CONFIG_GEN_UICR_SECONDARY_PROTECTEDMEM)
+    list(APPEND secondary_args --secondary-protectedmem-size ${CONFIG_GEN_UICR_SECONDARY_PROTECTEDMEM_SIZE_BYTES})
+  endif()
+
+  # Handle secondary MPCCONF configuration
+  if(CONFIG_GEN_UICR_SECONDARY_MPCCONF)
+    list(APPEND secondary_args --secondary-mpcconf)
+
+    # Compute SECONDARY_MPCCONF absolute address and size from this image's devicetree
+    compute_partition_address_and_size("secondary_mpcconf_partition" SECONDARY_MPCCONF_ADDRESS SECONDARY_MPCCONF_SIZE)
+
+    list(APPEND secondary_args --secondary-mpcconf-address ${SECONDARY_MPCCONF_ADDRESS})
+    list(APPEND secondary_args --secondary-mpcconf-size ${SECONDARY_MPCCONF_SIZE})
+  endif()
+
+  # Handle secondary PERIPHCONF configuration
+  if(CONFIG_GEN_UICR_SECONDARY_PERIPHCONF)
+    list(APPEND secondary_args --secondary-periphconf)
+
     # Compute SECONDARY_PERIPHCONF absolute address and size from this image's devicetree
     compute_partition_address_and_size("secondary_periphconf_partition" SECONDARY_PERIPHCONF_ADDRESS SECONDARY_PERIPHCONF_SIZE)
 
     list(APPEND secondary_args --secondary-periphconf-address ${SECONDARY_PERIPHCONF_ADDRESS})
     list(APPEND secondary_args --secondary-periphconf-size ${SECONDARY_PERIPHCONF_SIZE})
+  endif()
+
+  if(CONFIG_GEN_UICR_SECONDARY_GENERATE_PERIPHCONF)
     list(APPEND secondary_args --out-secondary-periphconf-hex ${secondary_periphconf_hex_file})
 
     foreach(elf ${secondary_periphconf_elfs})
       list(APPEND secondary_args --in-secondary-periphconf-elf ${elf})
     endforeach()
   endif()
+  if(CONFIG_GEN_UICR_SECONDARY_GENERATE_MPCCONF)
+    list(APPEND secondary_args --out-secondary-mpcconf-hex ${secondary_mpcconf_hex_file})
+
+    foreach(elf ${secondary_mpcconf_elfs})
+      list(APPEND secondary_args --in-secondary-mpcconf-elf ${elf})
+    endforeach()
+  endif()
+endif()
+
+if(CONFIG_GEN_UICR_POLICY_PERIPHCONF_STAGE_INIT OR CONFIG_GEN_UICR_POLICY_PERIPHCONF_STAGE_NORMAL)
+  list(APPEND policy_args --policy-periphconf-stage ${CONFIG_GEN_UICR_POLICY_PERIPHCONF_STAGE_VALUE})
+endif()
+
+if(CONFIG_GEN_UICR_POLICY_MPCCONF_STAGE_INIT OR CONFIG_GEN_UICR_POLICY_MPCCONF_STAGE_NORMAL)
+  list(APPEND policy_args --policy-mpcconf-stage ${CONFIG_GEN_UICR_POLICY_MPCCONF_STAGE_VALUE})
 endif()
 
 # Generate hex files (merged, uicr-only, periphconf-only, and secondary-periphconf-only)
 add_custom_command(
   OUTPUT ${merged_hex_file} ${uicr_hex_file} ${periphconf_hex_file} ${secondary_periphconf_hex_file}
-  COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${ZEPHYR_BASE}/scripts/dts/python-devicetree/src
-          ${PYTHON_EXECUTABLE} ${ZEPHYR_BASE}/soc/nordic/common/uicr/gen_uicr.py
+  COMMAND ${PYTHON_EXECUTABLE} ${IRONSIDE_SUPPORT_DIR}/se/tool/ironside/__main__.py
+          gen-uicr
           --uicr-address ${UICR_ADDRESS}
           --out-merged-hex ${merged_hex_file}
           --out-uicr-hex ${uicr_hex_file}
+          --periphconf-section-name "periphconf_entry"
+          --mpcconf-section-name "mpcconf_entry"
+          --periphconf-ipcmap-reallocate
+          ${lock_args}
+          ${eraseprotect_args}
+          ${approtect_args}
+          ${wdtstart_args}
+          ${mpcconf_args}
           ${periphconf_args}
           ${securestorage_args}
           ${protectedmem_args}
           ${secondary_args}
+          ${policy_args}
   DEPENDS ${periphconf_elfs} ${secondary_periphconf_elfs}
   WORKING_DIRECTORY ${APPLICATION_BINARY_DIR}
   COMMENT "Using gen_uicr.py to generate ${merged_hex_file}, ${uicr_hex_file}, ${periphconf_hex_file}, and ${secondary_periphconf_hex_file} from ${periphconf_elfs} ${secondary_periphconf_elfs}"

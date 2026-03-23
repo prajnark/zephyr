@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 NXP
+ * Copyright 2025-2026 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,8 +24,10 @@ struct rtc_counter_config {
 };
 
 struct rtc_counter_data {
-	/* Unix seconds offset from raw counter ticks */
+	/* Offset in counter ticks between raw counter and Unix epoch */
 	int64_t epoch_offset;
+	/* true once rtc_set_time() establishes epoch_offset */
+	bool epoch_valid;
 	/* protects epoch_offset */
 	struct k_spinlock lock;
 #ifdef CONFIG_RTC_ALARM
@@ -47,7 +49,8 @@ struct rtc_counter_data {
  * Generic RTC time to ticks conversion using time.h and counter API.
  * Returns 0 on success, -EINVAL on invalid time or overflow.
  */
-static int rtc_counter_time_to_ticks(const struct rtc_time *timeptr, uint32_t *ticks_out)
+static int rtc_counter_time_to_ticks(const struct rtc_time *timeptr, uint32_t tick_freq,
+					 uint64_t *ticks_out)
 {
 	struct tm tm_val;
 	int64_t seconds64;
@@ -69,22 +72,35 @@ static int rtc_counter_time_to_ticks(const struct rtc_time *timeptr, uint32_t *t
 	/* UTC, 64-bit, no DST/timezone ambiguity */
 	seconds64 = timeutil_timegm64(&tm_val);
 
-	/* Reject invalid/negative/out-of-range for 32-bit tick domain */
-	if (seconds64 < 0 || seconds64 > (int64_t)UINT32_MAX) {
+	if (seconds64 < 0) {
 		return -EINVAL;
 	}
 
-	*ticks_out = (uint32_t)seconds64;
+	if (tick_freq == 0U) {
+		return -ERANGE;
+	}
+
+	/* Guard overflow: ticks = seconds * freq must fit into 64-bit */
+	if ((uint64_t)seconds64 > (uint64_t)INT64_MAX / (uint64_t)tick_freq) {
+		return -ERANGE;
+	}
+
+	*ticks_out = (uint64_t)seconds64 * (uint64_t)tick_freq;
 	return 0;
 }
 
 /* Generic RTC ticks to time conversion using time.h and counter API */
-static void rtc_counter_ticks_to_time(uint32_t ticks, struct rtc_time *timeptr)
+static void rtc_counter_ticks_to_time(uint64_t ticks, uint32_t tick_freq, struct rtc_time *timeptr)
 {
 	time_t seconds;
 	struct tm tm_val;
 
-	seconds = (time_t)ticks;
+	if (tick_freq == 0U) {
+		memset(timeptr, 0, sizeof(struct rtc_time));
+		return;
+	}
+
+	seconds = (time_t)(ticks / (uint64_t)tick_freq);
 
 	if (gmtime_r(&seconds, &tm_val) == NULL) {
 		memset(timeptr, 0, sizeof(struct rtc_time));
@@ -110,15 +126,26 @@ static void rtc_counter_alarm_callback(const struct device *counter_dev, uint8_t
 {
 	struct rtc_counter_data *data = (struct rtc_counter_data *)user_data;
 	const struct device *rtc_dev = data->rtc_dev;
+	rtc_alarm_callback cb = NULL;
+	void *cb_user_data = NULL;
 
-	if (chan_id < data->num_alarm_chans && data->alarm_callback[chan_id] != NULL) {
-		data->alarm_callback[chan_id](rtc_dev, chan_id, data->alarm_user_data[chan_id]);
-		data->alarm_pending[chan_id] = false;
-	} else if (chan_id < data->num_alarm_chans) {
-		data->alarm_pending[chan_id] = true;
-	} else {
+	ARG_UNUSED(counter_dev);
+	ARG_UNUSED(ticks);
+
+	if (chan_id >= data->num_alarm_chans) {
 		LOG_DBG("Spurious alarm callback on channel %u (max %u)", chan_id,
 			data->num_alarm_chans ? (data->num_alarm_chans - 1U) : 0U);
+		return;
+	}
+
+	K_SPINLOCK(&data->lock) {
+		data->alarm_pending[chan_id] = true;
+		cb = data->alarm_callback[chan_id];
+		cb_user_data = data->alarm_user_data[chan_id];
+	}
+
+	if (cb != NULL) {
+		cb(rtc_dev, chan_id, cb_user_data);
 	}
 }
 
@@ -148,7 +175,8 @@ static int rtc_counter_alarm_set_time(const struct device *dev, uint16_t id, uin
 {
 	const struct rtc_counter_config *config = dev->config;
 	struct rtc_counter_data *data = dev->data;
-	uint32_t desired_ticks;
+	uint64_t desired_ticks;
+	uint32_t freq;
 	int ret;
 	int64_t epoch;
 	int64_t raw_alarm_ticks_64;
@@ -156,6 +184,7 @@ static int rtc_counter_alarm_set_time(const struct device *dev, uint16_t id, uin
 	uint32_t alarm_ticks;
 	uint32_t now_raw;
 	struct counter_alarm_cfg alarm_cfg;
+	bool epoch_valid;
 
 	if (!data->alarm_capable) {
 		return -ENOTSUP;
@@ -186,7 +215,9 @@ static int rtc_counter_alarm_set_time(const struct device *dev, uint16_t id, uin
 		return -EINVAL;
 	}
 
-	ret = rtc_counter_time_to_ticks(timeptr, &desired_ticks);
+	freq = counter_get_frequency(config->counter_dev);
+
+	ret = rtc_counter_time_to_ticks(timeptr, freq, &desired_ticks);
 
 	/* -EINVAL on overflow/invalid time */
 	if (ret < 0) {
@@ -196,6 +227,16 @@ static int rtc_counter_alarm_set_time(const struct device *dev, uint16_t id, uin
 	/* Convert desired absolute Unix time to a raw tick value for the counter */
 	K_SPINLOCK(&data->lock) {
 		epoch = data->epoch_offset;
+		epoch_valid = data->epoch_valid;
+		/* Record configured mask and time for get_time; clear pending */
+		data->alarm_mask[id] = mask;
+		data->alarm_time[id] = *timeptr;
+		data->alarm_pending[id] = false;
+	}
+
+	/* Allow configuring alarms before rtc_set_time(). Arm them on set_time(). */
+	if (!epoch_valid) {
+		return 0;
 	}
 
 	raw_alarm_ticks_64 = (int64_t)desired_ticks - epoch;
@@ -228,14 +269,16 @@ static int rtc_counter_alarm_set_time(const struct device *dev, uint16_t id, uin
 	alarm_cfg.user_data = data;
 	alarm_cfg.flags = COUNTER_ALARM_CFG_ABSOLUTE | COUNTER_ALARM_CFG_EXPIRE_WHEN_LATE;
 
-	/* Record configured mask and time for get_time; clear pending */
-	K_SPINLOCK(&data->lock) {
-		data->alarm_mask[id] = mask;
-		data->alarm_time[id] = *timeptr;
-		data->alarm_pending[id] = false;
+	ret = counter_set_channel_alarm(config->counter_dev, (uint8_t)id, &alarm_cfg);
+	if (ret == -ETIME) {
+		/* Treat "late" as an immediate expiry when EXPIRE_WHEN_LATE was requested. */
+		K_SPINLOCK(&data->lock) {
+			data->alarm_pending[id] = true;
+		}
+		return 0;
 	}
 
-	return counter_set_channel_alarm(config->counter_dev, (uint8_t)id, &alarm_cfg);
+	return ret;
 }
 
 static int rtc_counter_alarm_get_time(const struct device *dev, uint16_t id, uint16_t *mask,
@@ -349,7 +392,8 @@ static void rtc_counter_reschedule_alarms(const struct device *dev)
 	struct rtc_counter_data *data = dev->data;
 	uint16_t configured_mask;
 	struct rtc_time configured_time;
-	uint32_t alarm_abs_ticks;
+	uint64_t alarm_abs_ticks;
+	uint32_t freq;
 	int64_t epoch;
 	int64_t raw_alarm_ticks_64;
 	uint32_t top;
@@ -377,7 +421,8 @@ static void rtc_counter_reschedule_alarms(const struct device *dev)
 		/* Cancel any in-flight alarm before reprogramming */
 		(void)counter_cancel_channel_alarm(config->counter_dev, (uint8_t)id);
 
-		if (rtc_counter_time_to_ticks(&configured_time, &alarm_abs_ticks) < 0) {
+		freq = counter_get_frequency(config->counter_dev);
+		if (rtc_counter_time_to_ticks(&configured_time, freq, &alarm_abs_ticks) < 0) {
 			/* Should not happen: skip this alarm */
 			continue;
 		}
@@ -401,8 +446,15 @@ static void rtc_counter_reschedule_alarms(const struct device *dev)
 		alarm_cfg.ticks = alarm_ticks;
 		alarm_cfg.user_data = data;
 		alarm_cfg.flags = COUNTER_ALARM_CFG_ABSOLUTE | COUNTER_ALARM_CFG_EXPIRE_WHEN_LATE;
+		int set_ret;
 
-		(void)counter_set_channel_alarm(config->counter_dev, (uint8_t)id, &alarm_cfg);
+		set_ret = counter_set_channel_alarm(config->counter_dev, (uint8_t)id,
+					   &alarm_cfg);
+		if (set_ret == -ETIME) {
+			K_SPINLOCK(&data->lock) {
+				data->alarm_pending[id] = true;
+			}
+		}
 	}
 }
 
@@ -412,15 +464,18 @@ static int rtc_counter_set_time(const struct device *dev, const struct rtc_time 
 {
 	const struct rtc_counter_config *config = dev->config;
 	struct rtc_counter_data *data = dev->data;
-	uint32_t desired_ticks = 0;
+	uint64_t desired_ticks = 0;
 	uint32_t now_ticks = 0;
 	int ret;
+	uint32_t freq;
 
 	if (timeptr == NULL) {
 		return -EINVAL;
 	}
 
-	ret = rtc_counter_time_to_ticks(timeptr, &desired_ticks);
+	freq = counter_get_frequency(config->counter_dev);
+
+	ret = rtc_counter_time_to_ticks(timeptr, freq, &desired_ticks);
 
 	/* -EINVAL on overflow/invalid time */
 	if (ret < 0) {
@@ -439,9 +494,10 @@ static int rtc_counter_set_time(const struct device *dev, const struct rtc_time 
 		return ret;
 	}
 
-	/* Update the software offset: offset = desired_time - now_ticks */
+	/* Update the software offset (in ticks): offset = desired_ticks - now_ticks */
 	K_SPINLOCK(&data->lock) {
 		data->epoch_offset = (int64_t)desired_ticks - (int64_t)now_ticks;
+		data->epoch_valid = true;
 	}
 
 #ifdef CONFIG_RTC_ALARM
@@ -464,7 +520,8 @@ static int rtc_counter_get_time(const struct device *dev, struct rtc_time *timep
 	uint32_t now_ticks;
 	int ret;
 	int64_t epoch;
-	int64_t current_seconds;
+	uint64_t current_ticks_64;
+	uint32_t freq;
 
 	if (timeptr == NULL) {
 		return -EINVAL;
@@ -480,14 +537,25 @@ static int rtc_counter_get_time(const struct device *dev, struct rtc_time *timep
 		epoch = data->epoch_offset;
 	}
 
-	current_seconds = (int64_t)now_ticks + epoch;
+	/* Compute accumulated ticks (may be > 32-bit) */
+	int64_t sum_ticks = (int64_t)now_ticks + epoch;
 
-	if (current_seconds < 0 || current_seconds > UINT32_MAX) {
+	if (sum_ticks < 0) {
+		return -ERANGE;
+	}
+	current_ticks_64 = (uint64_t)sum_ticks;
+	freq = counter_get_frequency(config->counter_dev);
+
+	/* Optional guard: derived seconds must fit 32-bit to mirror prior check */
+	if (freq == 0U) {
+		return -ERANGE;
+	}
+	if ((current_ticks_64 / (uint64_t)freq) > (uint64_t)UINT32_MAX) {
 		return -ERANGE;
 	}
 
 	memset(timeptr, 0, sizeof(struct rtc_time));
-	rtc_counter_ticks_to_time((uint32_t)current_seconds, timeptr);
+	rtc_counter_ticks_to_time(current_ticks_64, freq, timeptr);
 
 	return 0;
 }
@@ -535,16 +603,16 @@ static int rtc_counter_init(const struct device *dev)
 		return -ENODEV;
 	}
 
-	/* Require a 1 Hz counter frequency */
+	/* Validate counter frequency (must be non-zero) */
 	freq = counter_get_frequency(config->counter_dev);
-
-	if (freq != 1U) {
-		LOG_ERR("Unsupported counter frequency: %u Hz (expected 1 Hz)", freq);
+	if (freq == 0U) {
+		LOG_ERR("Unsupported counter frequency: %u Hz", freq);
 		return -ENOTSUP;
 	}
 
 	/* Start with zero offset until rtc_set_time is called */
 	data->epoch_offset = 0;
+	data->epoch_valid = false;
 
 #ifdef CONFIG_RTC_ALARM
 	data->rtc_dev = dev;

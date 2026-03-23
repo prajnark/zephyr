@@ -22,7 +22,7 @@ Click the operating system you are using.
 
    .. group-tab:: Ubuntu
 
-      This guide covers Ubuntu version 22.04 LTS and later.
+      This guide covers Ubuntu version 24.04 LTS and later.
       If you are using a different Linux distribution see :ref:`installation_linux`.
 
       .. code-block:: bash
@@ -62,7 +62,7 @@ The current minimum required version for the main dependencies are:
      - 3.20.5
 
    * - `Python <https://www.python.org/>`_
-     - 3.10
+     - 3.12
 
    * - `Devicetree compiler <https://www.devicetree.org/>`_
      - 1.4.6
@@ -171,7 +171,7 @@ The current minimum required version for the main dependencies are:
 
          .. code-block:: bat
 
-            winget install Kitware.CMake Ninja-build.Ninja oss-winget.gperf python Git.Git oss-winget.dtc wget 7zip.7zip
+            winget install Kitware.CMake Ninja-build.Ninja oss-winget.gperf Python.Python.3.12 Git.Git oss-winget.dtc wget 7zip.7zip
 
       #. Close the terminal window.
 
@@ -266,6 +266,10 @@ chosen. You'll also install Zephyr's additional Python dependencies in a
 
             west packages pip --install
 
+         .. note::
+
+            This could downgrade or upgrade west itself.
+
    .. group-tab:: macOS
 
       #. Create a new virtual environment:
@@ -317,6 +321,10 @@ chosen. You'll also install Zephyr's additional Python dependencies in a
 
             west packages pip --install
 
+         .. note::
+
+            This could downgrade or upgrade west itself.
+
    .. group-tab:: Windows
 
       #. Open a ``cmd.exe`` or PowerShell terminal window **as a regular user**
@@ -336,6 +344,15 @@ chosen. You'll also install Zephyr's additional Python dependencies in a
                python -m venv zephyrproject\.venv
 
       #. Activate the virtual environment:
+
+         .. note::
+
+            Python's virtual environment activation in PowerShell requires
+            running a script itself, which needs to be allowed.
+
+            .. code-block:: powershell
+
+               Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
          .. tabs::
 
@@ -380,9 +397,19 @@ chosen. You'll also install Zephyr's additional Python dependencies in a
 
       #. Install Python dependencies using ``west packages``.
 
-         .. code-block:: bat
+         .. tabs::
 
-            west packages pip --install
+            .. code-tab:: bat
+
+               cmd /c zephyr\scripts\utils\west-packages-pip-install.cmd
+
+            .. code-tab:: powershell
+
+               python -m pip install @((west packages pip) -split ' ')
+
+         .. note::
+
+            This could downgrade or upgrade west itself.
 
 Install the Zephyr SDK
 **********************
@@ -544,11 +571,11 @@ Then flash the sample using :ref:`west flash <west-flashing>`:
 
 If you're using blinky, the LED will start to blink as shown in this figure:
 
-.. figure:: img/ReelBoard-Blinky.png
+.. figure:: img/ReelBoard-Blinky.webp
    :width: 400px
    :name: reelboard-blinky
 
-   Phytec :ref:`reel_board <reel_board>` running blinky
+   Phytec :zephyr:board:`reel_board <reel_board>` running blinky
 
 Next Steps
 **********

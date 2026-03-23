@@ -24,12 +24,14 @@ config CPU_RXV1
 config CPU_RXV2
 	bool
 	select HAS_EXCEPT_VECTOR_TABLE
+	select CPU_HAS_FPU
 	help
 	  Set if the processor supports the Renesas RXv2 instruction set.
 
 config CPU_RXV3
 	bool
 	select HAS_EXCEPT_VECTOR_TABLE
+	select CPU_HAS_FPU
 	help
 	  Set if the processor supports the Renesas RXv3 instruction set.
 
@@ -72,5 +74,10 @@ config INITIALIZATION_STACK_SIZE
 	default 512
 	help
 	  Stack size for initialization process of kernel (in bytes)
+
+config HAS_MAPPED_INTERRUPTS
+	bool
+	help
+	  Support for mapped interrupts.
 
 endmenu

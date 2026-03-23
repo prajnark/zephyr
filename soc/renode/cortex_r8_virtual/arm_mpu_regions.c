@@ -6,7 +6,7 @@
  */
 
 #include <zephyr/kernel.h>
-#include <zephyr/arch/arm/cortex_m/arm_mpu_mem_cfg.h>
+#include <zephyr/arch/arm/mpu/arm_mpu_mem_cfg.h>
 
 extern const uint32_t __rom_region_start;
 extern const uint32_t __rom_region_mpu_size_bits;
@@ -56,6 +56,13 @@ static const struct arm_mpu_region mpu_regions[] = {
 		{.rasr = P_RO_U_RO_Msk |
 			 NORMAL_OUTER_INNER_WRITE_BACK_WRITE_READ_ALLOCATE_NON_SHAREABLE}),
 #endif /* CONFIG_XIP */
+	MPU_REGION_ENTRY(
+		"priv_peripherals",
+		0xae000000,
+		REGION_8K,
+		{.rasr = P_RW_U_NA_Msk |
+			 DEVICE_SHAREABLE |
+			 NOT_EXEC}),
 	MPU_REGION_ENTRY(
 		"peripherals",
 		0xf8000000,

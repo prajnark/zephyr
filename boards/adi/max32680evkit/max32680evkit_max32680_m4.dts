@@ -6,7 +6,7 @@
 
 /dts-v1/;
 
-#include <adi/max32/max32680.dtsi>
+#include <adi/max32/max32680-m4.dtsi>
 #include <adi/max32/max32680-pinctrl.dtsi>
 #include <zephyr/dt-bindings/gpio/adi-max32-gpio.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
@@ -113,6 +113,13 @@
 	status = "okay";
 };
 
+/*
+ * ERTCO is required for counter RTC
+ */
+&clk_ertco {
+	status = "okay";
+};
+
 &gpio0 {
 	status = "okay";
 };
@@ -173,4 +180,8 @@
 &w1 {
 	pinctrl-0 = <&owm_io_p0_6 &owm_pe_p0_7>;
 	pinctrl-names = "default";
+};
+
+&rtc_counter {
+	status = "okay";
 };

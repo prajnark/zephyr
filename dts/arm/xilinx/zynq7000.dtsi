@@ -20,7 +20,7 @@
 
 		ocm_high: memory@fffc0000 {
 			compatible = "zephyr,memory-region", "xlnx,zynq-ocm";
-			reg = <0xFFFC0000 DT_SIZE_K(256)>;
+			reg = <0xfffc0000 DT_SIZE_K(256)>;
 			zephyr,memory-region = "OCM_HIGH";
 		};
 
@@ -36,7 +36,7 @@
 				      IRQ_DEFAULT_PRIORITY>,
 				     <GIC_PPI 10 IRQ_TYPE_EDGE
 				      IRQ_DEFAULT_PRIORITY>;
-			reg = <0xf8f00200 0x1C>;
+			reg = <0xf8f00200 0x1c>;
 		};
 
 		gic: interrupt-controller@f8f01000 {
@@ -61,7 +61,6 @@
 			mdio-phy-address = <XLNX_GEM_PHY_AUTO_DETECT>;
 			phy-poll-interval = <1000>;
 			link-speed = <XLNX_GEM_LINK_SPEED_100MBIT>;
-			amba-ahb-dbus-width = <XLNX_GEM_AMBA_AHB_DBUS_WIDTH_32BIT>;
 			amba-ahb-burst-length = <XLNX_GEM_AMBA_AHB_BURST_SINGLE>;
 			hw-rx-buffer-size = <XLNX_GEM_HW_RX_BUFFER_SIZE_8KB>;
 			hw-rx-buffer-offset = <0>;
@@ -88,7 +87,6 @@
 			mdio-phy-address = <XLNX_GEM_PHY_AUTO_DETECT>;
 			phy-poll-interval = <1000>;
 			link-speed = <XLNX_GEM_LINK_SPEED_100MBIT>;
-			amba-ahb-dbus-width = <XLNX_GEM_AMBA_AHB_DBUS_WIDTH_32BIT>;
 			amba-ahb-burst-length = <XLNX_GEM_AMBA_AHB_BURST_SINGLE>;
 			hw-rx-buffer-size = <XLNX_GEM_HW_RX_BUFFER_SIZE_8KB>;
 			hw-rx-buffer-offset = <0>;

@@ -256,9 +256,7 @@ static void renesas_ra_eth_initialize(struct net_if *iface)
 
 	net_if_set_link_addr(iface, ctx->mac, sizeof(ctx->mac), NET_LINK_ETHERNET);
 
-	if (ctx->iface == NULL) {
-		ctx->iface = iface;
-	}
+	ctx->iface = iface;
 
 	ethernet_init(iface);
 
@@ -309,9 +307,17 @@ error:
 	return -1;
 }
 
+static const struct device *renesas_ra_eth_get_phy(const struct device *dev)
+{
+	const struct renesas_ra_eth_config *config = dev->config;
+
+	return config->phy_dev;
+}
+
 static const struct ethernet_api api_funcs = {
 	.iface_api.init = renesas_ra_eth_initialize,
 	.get_capabilities = renesas_ra_eth_get_capabilities,
+	.get_phy = renesas_ra_eth_get_phy,
 	.send = renesas_ra_eth_tx,
 };
 
@@ -339,7 +345,7 @@ static struct net_pkt *renesas_ra_eth_rx(const struct device *dev)
 		goto out;
 	}
 
-	pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, len, AF_UNSPEC, 0, K_MSEC(100));
+	pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, len, NET_AF_UNSPEC, 0, K_MSEC(100));
 	if (!pkt) {
 		LOG_ERR("Failed to obtain RX buffer");
 		goto out;

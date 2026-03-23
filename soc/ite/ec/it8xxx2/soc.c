@@ -12,6 +12,7 @@
 #include "ilm.h"
 #include <soc_common.h>
 #include "soc_espi.h"
+#include "soc_timer.h"
 #include <zephyr/dt-bindings/interrupt-controller/ite-intc.h>
 
 /*
@@ -327,7 +328,9 @@ void riscv_idle(enum chip_pll_mode mode, unsigned int key)
 	 * interrupt here to protect the below content.
 	 */
 	csr_clear(mie, MIP_MEIP);
+#if defined(CONFIG_TRACING)
 	sys_trace_idle();
+#endif
 #ifdef CONFIG_ESPI
 	/*
 	 * H2RAM feature requires RAM clock to be active. Since the below doze
@@ -345,6 +348,19 @@ void riscv_idle(enum chip_pll_mode mode, unsigned int key)
 	/* Chip doze after wfi instruction */
 	chip_pll_ctrl(mode);
 
+#if defined(CONFIG_I2C_ITE_ENHANCE) && defined(CONFIG_I2C_TARGET_BUFFER_MODE)
+	/* If the event timer or free-run timer is close to expiration when system
+	 * enters idle with I2C target DMA mode enabled, the memory and CPU clocks
+	 * may become unsynchronized after wakeup. This causes CPU to fetch incorrect
+	 * data and eventually trigger SoC watchdog timeout.
+	 * Due to this hardware limitation, SoC should skip entering idle mode if
+	 * the remaining timer value is less than 150µs(safe margin).
+	 */
+	if (ite_ec_timer_block_idle()) {
+		goto __no_idle;
+	}
+#endif /* defined(CONFIG_I2C_ITE_ENHANCE) && defined(CONFIG_I2C_TARGET_BUFFER_MODE) */
+
 	do {
 #ifndef CONFIG_SOC_IT8XXX2_JTAG_DEBUG_INTERFACE
 		/* Wait for interrupt */
@@ -360,6 +376,9 @@ void riscv_idle(enum chip_pll_mode mode, unsigned int key)
 		 */
 	} while (ite_intc_no_irq());
 
+#if defined(CONFIG_I2C_ITE_ENHANCE) && defined(CONFIG_I2C_TARGET_BUFFER_MODE)
+__no_idle:
+#endif /* defined(CONFIG_I2C_ITE_ENHANCE) && defined(CONFIG_I2C_TARGET_BUFFER_MODE) */
 	if (IS_ENABLED(CONFIG_SOC_IT8XXX2_LCVCO)) {
 		if (mode != CHIP_PLL_DOZE) {
 			IT8XXX2_ECPM_PFACC2R |= PLL_FREQ_AUTO_CAL_START;
@@ -374,6 +393,9 @@ void riscv_idle(enum chip_pll_mode mode, unsigned int key)
 #ifdef CONFIG_ESPI
 	/* CPU has been woken up, the interrupt is no longer needed */
 	espi_ite_ec_enable_trans_irq(ESPI_ITE_SOC_DEV, false);
+#endif
+#if defined(CONFIG_TRACING)
+	sys_trace_idle_exit();
 #endif
 	/*
 	 * Enable M-mode external interrupt
@@ -417,6 +439,22 @@ void soc_prep_hook(void)
 	IT8XXX2_GPIO_GPCRB3 = GPCR_PORT_PIN_MODE_INPUT;
 	IT8XXX2_GPIO_GPCRB4 = GPCR_PORT_PIN_MODE_INPUT;
 #endif
+
+#ifdef CONFIG_SOC_IT8XXX2_GPIO_Q_GROUP_SUPPORTED
+#if DT_HAS_COMPAT_STATUS_OKAY(ite_it8xxx2_power_elpm)
+	/* drive xlpout high and then enable elpm firmware control mode if
+	 * the elpm node is marked as okay.
+	 */
+	sys_write8(sys_read8(ELPM_BASE_ADDR + ELPMF1_WAKE_UP_CTRL_3) | FIRMWARE_CTRL_OUTPUT_H,
+		   ELPM_BASE_ADDR + ELPMF1_WAKE_UP_CTRL_3);
+	sys_write8(sys_read8(ELPM_BASE_ADDR + ELPMF1_WAKE_UP_CTRL_3) | FIRMWARE_CTRL_EN,
+		   ELPM_BASE_ADDR + ELPMF1_WAKE_UP_CTRL_3);
+#endif /* DT_HAS_COMPAT_STATUS_OKAY(ite_it8xxx2_power_elpm) */
+
+	/* set gpio-q group as gpio by default */
+	sys_write8(sys_read8(ELPM_BASE_ADDR + ELPMF5_INPUT_EN) & ~XLPIN_INPUT_ENABLE_MASK,
+		   ELPM_BASE_ADDR + ELPMF5_INPUT_EN);
+#endif /* CONFIG_SOC_IT8XXX2_GPIO_Q_GROUP_SUPPORTED */
 }
 
 static int ite_it8xxx2_init(void)
@@ -536,22 +574,6 @@ static int ite_it8xxx2_init(void)
 				IT8XXX2_USBPD_DISCONNECT_5_1K_CC1_DB);
 	}
 #endif /* (SOC_USBPD_ITE_PHY_PORT_COUNT > 0) */
-
-#ifdef CONFIG_SOC_IT8XXX2_GPIO_Q_GROUP_SUPPORTED
-#if DT_HAS_COMPAT_STATUS_OKAY(ite_it8xxx2_power_elpm)
-	/* drive xlpout high and then enable elpm firmware control mode if
-	 * the elpm node is marked as okay.
-	 */
-	sys_write8(sys_read8(ELPM_BASE_ADDR + ELPMF1_WAKE_UP_CTRL_3) | FIRMWARE_CTRL_OUTPUT_H,
-		   ELPM_BASE_ADDR + ELPMF1_WAKE_UP_CTRL_3);
-	sys_write8(sys_read8(ELPM_BASE_ADDR + ELPMF1_WAKE_UP_CTRL_3) | FIRMWARE_CTRL_EN,
-		   ELPM_BASE_ADDR + ELPMF1_WAKE_UP_CTRL_3);
-#endif /* DT_HAS_COMPAT_STATUS_OKAY(ite_it8xxx2_power_elpm) */
-
-	/* set gpio-q group as gpio by default */
-	sys_write8(sys_read8(ELPM_BASE_ADDR + ELPMF5_INPUT_EN) & ~XLPIN_INPUT_ENABLE_MASK,
-		   ELPM_BASE_ADDR + ELPMF5_INPUT_EN);
-#endif /* CONFIG_SOC_IT8XXX2_GPIO_Q_GROUP_SUPPORTED */
 
 	return 0;
 }
